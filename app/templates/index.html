@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tax Withholding Calculator - W-4 & DE 4 Guidance</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.5;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .section h2 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #333;
+            font-size: 1.2em;
+        }
+        .form-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .form-group {
+            flex: 1;
+            min-width: 200px;
+        }
+        .form-group.full-width {
+            flex-basis: 100%;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1em;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        .note {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 3px;
+        }
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .toggle-row input[type="checkbox"] {
+            width: auto;
+        }
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 5px;
+        }
+        .radio-group label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: normal;
+        }
+        .radio-group input { width: auto; }
+        .hidden { display: none; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.1em;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #results { display: none; }
+        .result-section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .result-section h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .tax-summary {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .tax-summary .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .tax-summary .row:last-child { border-bottom: none; }
+        .tax-summary .row.total {
+            font-weight: bold;
+            font-size: 1.2em;
+            border-top: 2px solid #333;
+            margin-top: 10px;
+            padding-top: 15px;
+        }
+        .form-guidance {
+            background: #e8f4fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            border-left: 4px solid #007bff;
+        }
+        .form-guidance h3 {
+            margin: 0 0 10px 0;
+            color: #0056b3;
+        }
+        .guidance-item {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #cce5ff;
+        }
+        .guidance-item:last-child { border-bottom: none; }
+        .guidance-step {
+            font-weight: bold;
+            color: #333;
+        }
+        .guidance-value {
+            font-size: 1.3em;
+            color: #007bff;
+            font-weight: bold;
+        }
+        .guidance-explanation {
+            font-size: 0.9em;
+            color: #555;
+            margin-top: 5px;
+        }
+        .collapsible {
+            cursor: pointer;
+            user-select: none;
+        }
+        .collapsible::after {
+            content: ' [+]';
+            font-size: 0.9em;
+        }
+        .collapsible.active::after {
+            content: ' [-]';
+        }
+        .collapse-content {
+            display: none;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+        .collapse-content.show { display: block; }
+        .bracket-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        .bracket-table th, .bracket-table td {
+            padding: 8px;
+            text-align: right;
+            border-bottom: 1px solid #ddd;
+        }
+        .bracket-table th {
+            background: #f0f0f0;
+            text-align: left;
+        }
+        .quarterly-box {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #ffc107;
+        }
+        .links {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e8f4fd;
+            border-radius: 6px;
+        }
+        .links a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .links a:hover { text-decoration: underline; }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        @media (max-width: 600px) {
+            .form-group { min-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Tax Withholding Calculator</h1>
+    <p class="subtitle">Calculate your tax burden and get specific W-4 and California DE 4 form guidance</p>
+
+    <form id="taxForm">
+        <!-- Tax Year & Filing Status -->
+        <div class="section">
+            <h2>Filing Information</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="tax_year">Tax Year</label>
+                    <select id="tax_year" name="tax_year" required>
+                        <option value="2025">2025</option>
+                        <option value="2026">2026</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="filing_status">Filing Status</label>
+                    <select id="filing_status" name="filing_status" required>
+                        <option value="single">Single</option>
+                        <option value="married_jointly">Married Filing Jointly</option>
+                        <option value="head_of_household">Head of Household</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Income Section -->
+        <div class="section">
+            <h2>W-2 Income</h2>
+
+            <!-- Salary 1 -->
+            <h3 style="margin-top:0">Salary 1</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="salary1_frequency">Pay Frequency</label>
+                    <select id="salary1_frequency" name="salary1_frequency" required>
+                        <option value="weekly">Weekly (52/year)</option>
+                        <option value="biweekly" selected>Bi-weekly (26/year)</option>
+                        <option value="semimonthly">Semi-monthly (24/year)</option>
+                        <option value="monthly">Monthly (12/year)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="salary1_gross">Gross Pay per Period ($)</label>
+                    <input type="number" id="salary1_gross" name="salary1_gross" step="0.01" min="0" placeholder="e.g., 3846.15" required>
+                </div>
+            </div>
+
+            <!-- Dual Income Toggle -->
+            <div class="toggle-row">
+                <input type="checkbox" id="dual_income" name="dual_income">
+                <label for="dual_income" style="margin:0;font-weight:normal">Add second salary (dual income household)</label>
+            </div>
+
+            <!-- Salary 2 (hidden by default) -->
+            <div id="salary2_section" class="hidden">
+                <h3>Salary 2</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="salary2_frequency">Pay Frequency</label>
+                        <select id="salary2_frequency" name="salary2_frequency">
+                            <option value="weekly">Weekly (52/year)</option>
+                            <option value="biweekly" selected>Bi-weekly (26/year)</option>
+                            <option value="semimonthly">Semi-monthly (24/year)</option>
+                            <option value="monthly">Monthly (12/year)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="salary2_gross">Gross Pay per Period ($)</label>
+                        <input type="number" id="salary2_gross" name="salary2_gross" step="0.01" min="0" placeholder="e.g., 2884.62">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Additional Income (1099s) -->
+        <div class="section">
+            <h2>Additional Income (Annual Amounts)</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="income_1099g">1099-G Income ($)</label>
+                    <input type="number" id="income_1099g" name="income_1099g" step="0.01" min="0" placeholder="0">
+                    <div class="note">State/local tax refunds, unemployment</div>
+                </div>
+                <div class="form-group">
+                    <label for="income_1099nec">1099-NEC/MISC Income ($)</label>
+                    <input type="number" id="income_1099nec" name="income_1099nec" step="0.01" min="0" placeholder="0">
+                    <div class="note">Self-employment, freelance (subject to 15.3% SE tax)</div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="income_1099int_div">1099-INT/DIV Income ($)</label>
+                    <input type="number" id="income_1099int_div" name="income_1099int_div" step="0.01" min="0" placeholder="0">
+                    <div class="note">Interest, dividends</div>
+                </div>
+                <div class="form-group">
+                    <label for="other_income">Other Taxable Income ($)</label>
+                    <input type="number" id="other_income" name="other_income" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+        </div>
+
+        <!-- Pre-tax Deductions Salary 1 -->
+        <div class="section">
+            <h2>Pre-tax Deductions - Salary 1</h2>
+            <div class="form-group full-width">
+                <label>Enter amounts as:</label>
+                <div class="radio-group">
+                    <label>
+                        <input type="radio" name="pretax1_type" value="per_period" checked>
+                        Per pay period
+                    </label>
+                    <label>
+                        <input type="radio" name="pretax1_type" value="annual">
+                        Annual total
+                    </label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax1_401k">401(k)/403(b) ($)</label>
+                    <input type="number" id="pretax1_401k" name="pretax1_401k" step="0.01" min="0" placeholder="0">
+                    <div class="note">2025 limit: $23,500 ($31,000 if 50+)</div>
+                </div>
+                <div class="form-group">
+                    <label for="pretax1_ira">Traditional IRA ($)</label>
+                    <input type="number" id="pretax1_ira" name="pretax1_ira" step="0.01" min="0" placeholder="0">
+                    <div class="note">Limit: $7,000 ($8,000 if 50+)</div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax1_health">Health Insurance ($)</label>
+                    <input type="number" id="pretax1_health" name="pretax1_health" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax1_hsa">HSA Contributions ($)</label>
+                    <input type="number" id="pretax1_hsa" name="pretax1_hsa" step="0.01" min="0" placeholder="0">
+                    <div class="note">2025: $4,300 individual / $8,550 family</div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax1_fsa">FSA Contributions ($)</label>
+                    <input type="number" id="pretax1_fsa" name="pretax1_fsa" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax1_dental">Dental Insurance ($)</label>
+                    <input type="number" id="pretax1_dental" name="pretax1_dental" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax1_vision">Vision Insurance ($)</label>
+                    <input type="number" id="pretax1_vision" name="pretax1_vision" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax1_other">Other Pre-tax ($)</label>
+                    <input type="number" id="pretax1_other" name="pretax1_other" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+        </div>
+
+        <!-- Pre-tax Deductions Salary 2 (hidden by default) -->
+        <div id="pretax2_section" class="section hidden">
+            <h2>Pre-tax Deductions - Salary 2</h2>
+            <div class="form-group full-width">
+                <label>Enter amounts as:</label>
+                <div class="radio-group">
+                    <label>
+                        <input type="radio" name="pretax2_type" value="per_period" checked>
+                        Per pay period
+                    </label>
+                    <label>
+                        <input type="radio" name="pretax2_type" value="annual">
+                        Annual total
+                    </label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax2_401k">401(k)/403(b) ($)</label>
+                    <input type="number" id="pretax2_401k" name="pretax2_401k" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax2_ira">Traditional IRA ($)</label>
+                    <input type="number" id="pretax2_ira" name="pretax2_ira" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax2_health">Health Insurance ($)</label>
+                    <input type="number" id="pretax2_health" name="pretax2_health" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax2_hsa">HSA Contributions ($)</label>
+                    <input type="number" id="pretax2_hsa" name="pretax2_hsa" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax2_fsa">FSA Contributions ($)</label>
+                    <input type="number" id="pretax2_fsa" name="pretax2_fsa" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax2_dental">Dental Insurance ($)</label>
+                    <input type="number" id="pretax2_dental" name="pretax2_dental" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pretax2_vision">Vision Insurance ($)</label>
+                    <input type="number" id="pretax2_vision" name="pretax2_vision" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="pretax2_other">Other Pre-tax ($)</label>
+                    <input type="number" id="pretax2_other" name="pretax2_other" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+        </div>
+
+        <!-- Dependents -->
+        <div class="section">
+            <h2>Dependents</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="children_under_17">Children under 17</label>
+                    <input type="number" id="children_under_17" name="children_under_17" min="0" max="20" value="0">
+                    <div class="note">Eligible for $2,000 Child Tax Credit each</div>
+                </div>
+                <div class="form-group">
+                    <label for="other_dependents">Other dependents</label>
+                    <input type="number" id="other_dependents" name="other_dependents" min="0" max="20" value="0">
+                    <div class="note">Eligible for $500 credit each</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Other Deductions -->
+        <div class="section">
+            <h2>Other Deductions</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="student_loan_interest">Student Loan Interest (Annual $)</label>
+                    <input type="number" id="student_loan_interest" name="student_loan_interest" step="0.01" min="0" placeholder="0">
+                    <div class="note">Deductible up to $2,500 (phases out at higher incomes)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Itemized Deductions -->
+        <div class="section">
+            <h2>Itemized Deductions (Annual Amounts)</h2>
+            <p class="note">Enter if you expect to itemize instead of taking the standard deduction. The calculator will automatically compare and use whichever is more beneficial.</p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="itemized_charitable">Charitable Contributions ($)</label>
+                    <input type="number" id="itemized_charitable" name="itemized_charitable" step="0.01" min="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label for="itemized_mortgage">Mortgage Interest ($)</label>
+                    <input type="number" id="itemized_mortgage" name="itemized_mortgage" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="itemized_salt">State & Local Taxes (SALT) ($)</label>
+                    <input type="number" id="itemized_salt" name="itemized_salt" step="0.01" min="0" placeholder="0">
+                    <div class="note">Federal cap: $10,000</div>
+                </div>
+                <div class="form-group">
+                    <label for="itemized_medical">Medical Expenses ($)</label>
+                    <input type="number" id="itemized_medical" name="itemized_medical" step="0.01" min="0" placeholder="0">
+                    <div class="note">Only amounts exceeding 7.5% of AGI are deductible</div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="itemized_other">Other Itemized Deductions ($)</label>
+                    <input type="number" id="itemized_other" name="itemized_other" step="0.01" min="0" placeholder="0">
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" id="calculateBtn">Calculate Tax & Get Form Guidance</button>
+    </form>
+
+    <div id="error" class="error hidden"></div>
+
+    <div id="results">
+        <!-- Results will be populated here by JavaScript -->
+    </div>
+
+    <div class="links">
+        <h3>Official Forms</h3>
+        <ul>
+            <li><a href="https://www.irs.gov/forms-pubs/about-form-w-4" target="_blank" rel="noopener">IRS Form W-4 - Employee's Withholding Certificate</a></li>
+            <li><a href="https://www.ftb.ca.gov/forms/misc/de4.html" target="_blank" rel="noopener">California DE 4 - Employee's Withholding Allowance Certificate</a></li>
+            <li><a href="https://www.irs.gov/forms-pubs/about-form-1040-es" target="_blank" rel="noopener">IRS Form 1040-ES - Estimated Tax for Individuals</a></li>
+            <li><a href="https://www.ftb.ca.gov/forms/2024/2024-540-es.pdf" target="_blank" rel="noopener">California Form 540-ES - Estimated Tax</a></li>
+        </ul>
+    </div>
+
+    <script>
+        // Toggle dual income section
+        document.getElementById('dual_income').addEventListener('change', function() {
+            document.getElementById('salary2_section').classList.toggle('hidden', !this.checked);
+            document.getElementById('pretax2_section').classList.toggle('hidden', !this.checked);
+        });
+
+        // Format currency
+        function formatCurrency(amount) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(amount);
+        }
+
+        function formatCurrencyExact(amount) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(amount);
+        }
+
+        // Form submission
+        document.getElementById('taxForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const btn = document.getElementById('calculateBtn');
+            btn.disabled = true;
+            btn.textContent = 'Calculating...';
+            document.getElementById('error').classList.add('hidden');
+
+            const formData = {
+                tax_year: parseInt(document.getElementById('tax_year').value),
+                filing_status: document.getElementById('filing_status').value,
+                salary1_frequency: document.getElementById('salary1_frequency').value,
+                salary1_gross: parseFloat(document.getElementById('salary1_gross').value) || 0,
+                dual_income: document.getElementById('dual_income').checked,
+                salary2_frequency: document.getElementById('salary2_frequency').value,
+                salary2_gross: parseFloat(document.getElementById('salary2_gross').value) || 0,
+                income_1099g: parseFloat(document.getElementById('income_1099g').value) || 0,
+                income_1099nec: parseFloat(document.getElementById('income_1099nec').value) || 0,
+                income_1099int_div: parseFloat(document.getElementById('income_1099int_div').value) || 0,
+                other_income: parseFloat(document.getElementById('other_income').value) || 0,
+                pretax_deductions_1: {
+                    input_type: document.querySelector('input[name="pretax1_type"]:checked').value,
+                    _401k: parseFloat(document.getElementById('pretax1_401k').value) || 0,
+                    ira: parseFloat(document.getElementById('pretax1_ira').value) || 0,
+                    health_insurance: parseFloat(document.getElementById('pretax1_health').value) || 0,
+                    hsa: parseFloat(document.getElementById('pretax1_hsa').value) || 0,
+                    fsa: parseFloat(document.getElementById('pretax1_fsa').value) || 0,
+                    dental: parseFloat(document.getElementById('pretax1_dental').value) || 0,
+                    vision: parseFloat(document.getElementById('pretax1_vision').value) || 0,
+                    other: parseFloat(document.getElementById('pretax1_other').value) || 0
+                },
+                pretax_deductions_2: {
+                    input_type: document.querySelector('input[name="pretax2_type"]:checked')?.value || 'per_period',
+                    _401k: parseFloat(document.getElementById('pretax2_401k').value) || 0,
+                    ira: parseFloat(document.getElementById('pretax2_ira').value) || 0,
+                    health_insurance: parseFloat(document.getElementById('pretax2_health').value) || 0,
+                    hsa: parseFloat(document.getElementById('pretax2_hsa').value) || 0,
+                    fsa: parseFloat(document.getElementById('pretax2_fsa').value) || 0,
+                    dental: parseFloat(document.getElementById('pretax2_dental').value) || 0,
+                    vision: parseFloat(document.getElementById('pretax2_vision').value) || 0,
+                    other: parseFloat(document.getElementById('pretax2_other').value) || 0
+                },
+                children_under_17: parseInt(document.getElementById('children_under_17').value) || 0,
+                other_dependents: parseInt(document.getElementById('other_dependents').value) || 0,
+                student_loan_interest: parseFloat(document.getElementById('student_loan_interest').value) || 0,
+                itemized_deductions: {
+                    charitable: parseFloat(document.getElementById('itemized_charitable').value) || 0,
+                    mortgage_interest: parseFloat(document.getElementById('itemized_mortgage').value) || 0,
+                    salt: parseFloat(document.getElementById('itemized_salt').value) || 0,
+                    medical: parseFloat(document.getElementById('itemized_medical').value) || 0,
+                    other: parseFloat(document.getElementById('itemized_other').value) || 0
+                }
+            };
+
+            try {
+                const response = await fetch('/calculate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                displayResults(result, formData);
+            } catch (err) {
+                document.getElementById('error').textContent = 'Error: ' + err.message;
+                document.getElementById('error').classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Calculate Tax & Get Form Guidance';
+            }
+        });
+
+        function displayResults(result, formData) {
+            const resultsDiv = document.getElementById('results');
+            const totals = result.withholding.totals;
+            const filingStatusDisplay = {
+                'single': 'Single',
+                'married_jointly': 'Married Filing Jointly',
+                'head_of_household': 'Head of Household'
+            };
+
+            let html = `
+                <div class="result-section">
+                    <h2>1. Estimated Tax Burden by Authority</h2>
+                    <div class="tax-summary">
+                        <div class="row">
+                            <span>Federal Income Tax:</span>
+                            <span>${formatCurrency(totals.federal_income_tax)}</span>
+                        </div>
+                        ${totals.self_employment_tax > 0 ? `
+                        <div class="row">
+                            <span>Self-Employment Tax (15.3%):</span>
+                            <span>${formatCurrency(totals.self_employment_tax)}</span>
+                        </div>` : ''}
+                        <div class="row">
+                            <span>California Income Tax:</span>
+                            <span>${formatCurrency(totals.california_tax)}</span>
+                        </div>
+                        <div class="row">
+                            <span>California SDI:</span>
+                            <span>${formatCurrency(totals.ca_sdi)}</span>
+                        </div>
+                        <div class="row total">
+                            <span>GRAND TOTAL TAX BURDEN:</span>
+                            <span>${formatCurrency(totals.grand_total)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="result-section">
+                    <h2>2. Federal W-4 Form Guidance</h2>
+                    ${result.withholding.w4_guidance.map(w4 => `
+                        <div class="form-guidance">
+                            <h3>W-4 for Salary ${w4.salary_num} (${formatCurrency(w4.annual_salary)}/year)</h3>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 1: Filing Status</div>
+                                <div class="guidance-value">${w4.step1.filing_status}</div>
+                                <div class="guidance-explanation">${w4.step1.explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 2(c): Multiple Jobs Checkbox</div>
+                                <div class="guidance-value">${w4.step2.check_box ? 'CHECK THIS BOX' : 'Leave unchecked'}</div>
+                                <div class="guidance-explanation">${w4.step2.explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 3: Claim Dependents</div>
+                                <div class="guidance-value">Enter: ${formatCurrency(w4.step3.amount)}</div>
+                                <div class="guidance-explanation">${w4.step3.explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 4(a): Other Income</div>
+                                <div class="guidance-value">Enter: ${formatCurrency(w4.step4a.amount)}</div>
+                                <div class="guidance-explanation">${w4.step4a.explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 4(b): Deductions</div>
+                                <div class="guidance-value">Enter: ${formatCurrency(w4.step4b.amount)}</div>
+                                <div class="guidance-explanation">${w4.step4b.explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Step 4(c): Extra Withholding per Paycheck</div>
+                                <div class="guidance-value">Enter: ${formatCurrency(w4.step4c.amount)}</div>
+                                <div class="guidance-explanation">${w4.step4c.explanation}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <div class="result-section">
+                    <h2>3. California DE 4 Form Guidance</h2>
+                    ${result.withholding.de4_guidance.map(de4 => `
+                        <div class="form-guidance">
+                            <h3>DE 4 for Salary ${de4.salary_num} (${formatCurrency(de4.annual_salary)}/year)</h3>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Filing Status</div>
+                                <div class="guidance-value">${de4.filing_status}</div>
+                                <div class="guidance-explanation">${de4.filing_status_explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Number of Allowances</div>
+                                <div class="guidance-value">Enter: ${de4.allowances}</div>
+                                <div class="guidance-explanation">${de4.allowances_explanation}</div>
+                            </div>
+
+                            <div class="guidance-item">
+                                <div class="guidance-step">Additional Withholding per Paycheck</div>
+                                <div class="guidance-value">Enter: ${formatCurrency(de4.additional_withholding)}</div>
+                                <div class="guidance-explanation">${de4.additional_withholding_explanation}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+            // Quarterly Payment Guidance
+            if (result.withholding.quarterly_guidance && result.withholding.quarterly_guidance.has_1099_income) {
+                const qg = result.withholding.quarterly_guidance;
+                html += `
+                    <div class="result-section">
+                        <h2>4. Quarterly Estimated Payment Guidance</h2>
+                        <div class="quarterly-box">
+                            <p><strong>You have 1099 income that may require quarterly estimated tax payments.</strong></p>
+                            <p>${qg.explanation}</p>
+
+                            <h4>Estimated Quarterly Payments:</h4>
+                            <ul>
+                                <li>Federal (${qg.federal_form}): <strong>${formatCurrency(qg.quarterly_federal)}</strong> per quarter</li>
+                                <li>California (${qg.ca_form}): <strong>${formatCurrency(qg.quarterly_ca)}</strong> per quarter</li>
+                            </ul>
+
+                            <h4>Due Dates for ${formData.tax_year}:</h4>
+                            <ul>
+                                ${qg.due_dates.map(d => `<li>${d[0]}: ${d[1]}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Detailed Breakdown (collapsible)
+            html += `
+                <div class="result-section">
+                    <h2 class="collapsible" onclick="toggleCollapse(this)">5. Detailed Tax Calculation Breakdown</h2>
+                    <div class="collapse-content">
+                        <h3>Income Summary</h3>
+                        <table class="bracket-table">
+                            <tr><th>Source</th><th>Amount</th></tr>
+                            <tr><td>Salary 1 (Annual)</td><td>${formatCurrency(result.federal.salary1_annual)}</td></tr>
+                            ${result.federal.salary2_annual > 0 ? `<tr><td>Salary 2 (Annual)</td><td>${formatCurrency(result.federal.salary2_annual)}</td></tr>` : ''}
+                            <tr><td>Additional Income (1099s)</td><td>${formatCurrency(result.federal.additional_income)}</td></tr>
+                            <tr><td><strong>Gross Income</strong></td><td><strong>${formatCurrency(result.federal.gross_income)}</strong></td></tr>
+                            <tr><td>Pre-tax Deductions</td><td>-${formatCurrency(result.federal.pretax_deductions)}</td></tr>
+                            ${result.federal.se_tax_deduction > 0 ? `<tr><td>SE Tax Deduction (50%)</td><td>-${formatCurrency(result.federal.se_tax_deduction)}</td></tr>` : ''}
+                            ${result.federal.student_loan_deduction.deduction > 0 ? `<tr><td>Student Loan Interest</td><td>-${formatCurrency(result.federal.student_loan_deduction.deduction)}</td></tr>` : ''}
+                            <tr><td><strong>Adjusted Gross Income (AGI)</strong></td><td><strong>${formatCurrency(result.federal.agi)}</strong></td></tr>
+                        </table>
+
+                        <h3>Federal Deduction Comparison</h3>
+                        <table class="bracket-table">
+                            <tr><th>Deduction Type</th><th>Amount</th></tr>
+                            <tr><td>Standard Deduction</td><td>${formatCurrency(result.federal.standard_deduction)}</td></tr>
+                            <tr><td>Itemized Deductions</td><td>${formatCurrency(result.federal.itemized_deduction.total)}</td></tr>
+                            <tr><td><strong>Deduction Used</strong></td><td><strong>${formatCurrency(result.federal.deduction_used)} (${result.federal.use_itemized ? 'Itemized' : 'Standard'})</strong></td></tr>
+                        </table>
+
+                        <h3>Federal Tax Brackets Applied</h3>
+                        <table class="bracket-table">
+                            <tr><th>Bracket</th><th>Rate</th><th>Taxable</th><th>Tax</th></tr>
+                            ${result.federal.bracket_breakdown.map(b => `
+                                <tr>
+                                    <td>$${b.bracket_start.toLocaleString()} - ${b.bracket_end === 'unlimited' ? 'unlimited' : '$' + b.bracket_end.toLocaleString()}</td>
+                                    <td>${b.rate}%</td>
+                                    <td>${formatCurrency(b.taxable_amount)}</td>
+                                    <td>${formatCurrency(b.tax)}</td>
+                                </tr>
+                            `).join('')}
+                            <tr><td colspan="3"><strong>Total Federal Tax (before credits)</strong></td><td><strong>${formatCurrency(result.federal.tax_before_credits)}</strong></td></tr>
+                        </table>
+
+                        <h3>Federal Credits</h3>
+                        <table class="bracket-table">
+                            <tr><th>Credit</th><th>Amount</th></tr>
+                            <tr><td>Child Tax Credit</td><td>${formatCurrency(result.federal.child_tax_credit.total)}</td></tr>
+                            <tr><td><strong>Final Federal Tax</strong></td><td><strong>${formatCurrency(result.federal.final_tax)}</strong></td></tr>
+                        </table>
+
+                        <h3>California Tax Summary</h3>
+                        <table class="bracket-table">
+                            <tr><td>CA Taxable Income</td><td>${formatCurrency(result.california.taxable_income)}</td></tr>
+                            <tr><td>CA Tax (before credits)</td><td>${formatCurrency(result.california.tax_before_credits)}</td></tr>
+                            ${result.california.mental_health_tax > 0 ? `<tr><td>Mental Health Services Tax</td><td>${formatCurrency(result.california.mental_health_tax)}</td></tr>` : ''}
+                            <tr><td>Exemption Credit</td><td>-${formatCurrency(result.california.exemption_credit)}</td></tr>
+                            <tr><td>Dependent Credits</td><td>-${formatCurrency(result.california.dependent_credit)}</td></tr>
+                            <tr><td><strong>Final CA Tax</strong></td><td><strong>${formatCurrency(result.california.final_tax)}</strong></td></tr>
+                        </table>
+
+                        <h3>California SDI</h3>
+                        <table class="bracket-table">
+                            <tr><td>SDI Rate</td><td>${result.california.sdi.rate}%</td></tr>
+                            <tr><td>Taxable Wages (up to $${result.california.sdi.wage_base.toLocaleString()})</td><td>${formatCurrency(result.california.sdi.taxable_wages)}</td></tr>
+                            <tr><td><strong>SDI Tax</strong></td><td><strong>${formatCurrency(result.california.sdi.tax)}</strong></td></tr>
+                        </table>
+
+                        ${result.federal.se_tax.total > 0 ? `
+                        <h3>Self-Employment Tax</h3>
+                        <table class="bracket-table">
+                            <tr><td>Net SE Earnings (92.35% of 1099-NEC)</td><td>${formatCurrency(result.federal.se_tax.se_income)}</td></tr>
+                            <tr><td>Social Security Tax (12.4%)</td><td>${formatCurrency(result.federal.se_tax.ss_tax)}</td></tr>
+                            <tr><td>Medicare Tax (2.9%)</td><td>${formatCurrency(result.federal.se_tax.medicare_tax)}</td></tr>
+                            <tr><td><strong>Total SE Tax</strong></td><td><strong>${formatCurrency(result.federal.se_tax.total)}</strong></td></tr>
+                        </table>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+
+            resultsDiv.innerHTML = html;
+            resultsDiv.style.display = 'block';
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function toggleCollapse(element) {
+            element.classList.toggle('active');
+            const content = element.nextElementSibling;
+            content.classList.toggle('show');
+        }
+    </script>
+</body>
+</html>
