@@ -4,7 +4,7 @@ services:
   tax-calculator:
     build: .
     ports:
-      - "5000:5000"
+      - "5001:5000"
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
