@@ -51,7 +51,9 @@ docker compose version
 
 3. **Access the calculator**:
 
-   Open your browser to: **http://localhost:5000**
+   Open your browser to: **http://localhost:5001**
+
+   > **Note**: We use port 5001 instead of 5000 to avoid conflicts with macOS AirPlay Receiver, which uses port 5000 by default.
 
 4. **Stop the calculator**:
 
@@ -177,20 +179,23 @@ California has 9 brackets ranging from 1% to 12.3%, plus an additional 1% Mental
 
 **Solution**: Start Docker Desktop from Applications and wait for it to fully initialize.
 
-### Port 5000 Already in Use
+### Port 5001 Already in Use
 
-**Symptom**: `Bind for 0.0.0.0:5000 failed: port is already allocated`
+**Symptom**: `Bind for 0.0.0.0:5001 failed: port is already allocated`
 
 **Solution**:
-1. Find what's using port 5000:
+1. Find what's using port 5001:
    ```bash
-   lsof -i :5000
+   lsof -i :5001
    ```
 2. Either stop that process, or change the port in `docker-compose.yml`:
    ```yaml
    ports:
-     - "5001:5000"  # Use port 5001 instead
+     - "5002:5000"  # Use port 5002 instead
    ```
+   Then access the calculator at `http://localhost:5002`
+
+> **Note**: We use port 5001 by default instead of 5000 to avoid conflicts with macOS AirPlay Receiver.
 
 ### macOS Firewall Prompt
 
