@@ -169,10 +169,25 @@ def calculate_federal_tax(data):
     filing_status = data['filing_status']
 
     # Calculate gross income from all sources
-    salary1_annual = data['salary1_gross'] * PAY_FREQUENCIES.get(data['salary1_frequency'], 26)
+    # Handle both per-period and annual salary input types
+    salary1_periods = PAY_FREQUENCIES.get(data['salary1_frequency'], 26)
+    if data.get('salary1_input_type') == 'annual':
+        salary1_annual = data.get('salary1_annual', 0)
+        salary1_per_period = salary1_annual / salary1_periods if salary1_periods > 0 else 0
+    else:
+        salary1_per_period = data['salary1_gross']
+        salary1_annual = salary1_per_period * salary1_periods
+
     salary2_annual = 0
+    salary2_per_period = 0
     if data.get('dual_income'):
-        salary2_annual = data.get('salary2_gross', 0) * PAY_FREQUENCIES.get(data.get('salary2_frequency', 'biweekly'), 26)
+        salary2_periods = PAY_FREQUENCIES.get(data.get('salary2_frequency', 'biweekly'), 26)
+        if data.get('salary2_input_type') == 'annual':
+            salary2_annual = data.get('salary2_annual', 0)
+            salary2_per_period = salary2_annual / salary2_periods if salary2_periods > 0 else 0
+        else:
+            salary2_per_period = data.get('salary2_gross', 0)
+            salary2_annual = salary2_per_period * salary2_periods
 
     w2_income = salary1_annual + salary2_annual
 
@@ -239,7 +254,9 @@ def calculate_federal_tax(data):
         'gross_income': round(gross_income, 2),
         'w2_income': round(w2_income, 2),
         'salary1_annual': round(salary1_annual, 2),
+        'salary1_per_period': round(salary1_per_period, 2),
         'salary2_annual': round(salary2_annual, 2),
+        'salary2_per_period': round(salary2_per_period, 2),
         'additional_income': round(total_additional_income, 2),
         'pretax_deductions': round(total_pretax, 2),
         'se_tax_deduction': round(se_tax['deduction'], 2),

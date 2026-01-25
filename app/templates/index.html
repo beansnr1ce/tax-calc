@@ -260,6 +260,19 @@
 
             <!-- Salary 1 -->
             <h3 style="margin-top:0">Salary 1</h3>
+            <div class="form-group full-width">
+                <label>Enter salary as:</label>
+                <div class="radio-group">
+                    <label>
+                        <input type="radio" name="salary1_input_type" value="per_period" checked>
+                        Per pay period amount
+                    </label>
+                    <label>
+                        <input type="radio" name="salary1_input_type" value="annual">
+                        Annual gross salary
+                    </label>
+                </div>
+            </div>
             <div class="form-row">
                 <div class="form-group">
                     <label for="salary1_frequency">Pay Frequency</label>
@@ -270,9 +283,13 @@
                         <option value="monthly">Monthly (12/year)</option>
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="salary1_gross_group">
                     <label for="salary1_gross">Gross Pay per Period ($)</label>
                     <input type="number" id="salary1_gross" name="salary1_gross" step="0.01" min="0" placeholder="e.g., 3846.15" required>
+                </div>
+                <div class="form-group hidden" id="salary1_annual_group">
+                    <label for="salary1_annual">Annual Gross Salary ($)</label>
+                    <input type="number" id="salary1_annual" name="salary1_annual" step="0.01" min="0" placeholder="e.g., 100000">
                 </div>
             </div>
 
@@ -285,6 +302,19 @@
             <!-- Salary 2 (hidden by default) -->
             <div id="salary2_section" class="hidden">
                 <h3>Salary 2</h3>
+                <div class="form-group full-width">
+                    <label>Enter salary as:</label>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="salary2_input_type" value="per_period" checked>
+                            Per pay period amount
+                        </label>
+                        <label>
+                            <input type="radio" name="salary2_input_type" value="annual">
+                            Annual gross salary
+                        </label>
+                    </div>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label for="salary2_frequency">Pay Frequency</label>
@@ -295,9 +325,13 @@
                             <option value="monthly">Monthly (12/year)</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group" id="salary2_gross_group">
                         <label for="salary2_gross">Gross Pay per Period ($)</label>
                         <input type="number" id="salary2_gross" name="salary2_gross" step="0.01" min="0" placeholder="e.g., 2884.62">
+                    </div>
+                    <div class="form-group hidden" id="salary2_annual_group">
+                        <label for="salary2_annual">Annual Gross Salary ($)</label>
+                        <input type="number" id="salary2_annual" name="salary2_annual" step="0.01" min="0" placeholder="e.g., 75000">
                     </div>
                 </div>
             </div>
@@ -533,10 +567,55 @@
     </div>
 
     <script>
+        // Toggle salary input type (per period vs annual)
+        function setupSalaryToggle(salaryNum) {
+            const radioButtons = document.querySelectorAll(`input[name="salary${salaryNum}_input_type"]`);
+            const grossGroup = document.getElementById(`salary${salaryNum}_gross_group`);
+            const annualGroup = document.getElementById(`salary${salaryNum}_annual_group`);
+            const grossInput = document.getElementById(`salary${salaryNum}_gross`);
+            const annualInput = document.getElementById(`salary${salaryNum}_annual`);
+
+            radioButtons.forEach(radio => {
+                radio.addEventListener('change', function() {
+                    if (this.value === 'per_period') {
+                        grossGroup.classList.remove('hidden');
+                        annualGroup.classList.add('hidden');
+                        grossInput.required = salaryNum === 1 || document.getElementById('dual_income').checked;
+                        annualInput.required = false;
+                    } else {
+                        grossGroup.classList.add('hidden');
+                        annualGroup.classList.remove('hidden');
+                        grossInput.required = false;
+                        annualInput.required = salaryNum === 1 || document.getElementById('dual_income').checked;
+                    }
+                });
+            });
+        }
+
+        setupSalaryToggle(1);
+        setupSalaryToggle(2);
+
         // Toggle dual income section
         document.getElementById('dual_income').addEventListener('change', function() {
             document.getElementById('salary2_section').classList.toggle('hidden', !this.checked);
             document.getElementById('pretax2_section').classList.toggle('hidden', !this.checked);
+
+            // Update required attributes for salary 2 based on input type
+            const salary2InputType = document.querySelector('input[name="salary2_input_type"]:checked').value;
+            const grossInput = document.getElementById('salary2_gross');
+            const annualInput = document.getElementById('salary2_annual');
+            if (this.checked) {
+                if (salary2InputType === 'per_period') {
+                    grossInput.required = true;
+                    annualInput.required = false;
+                } else {
+                    grossInput.required = false;
+                    annualInput.required = true;
+                }
+            } else {
+                grossInput.required = false;
+                annualInput.required = false;
+            }
         });
 
         // Format currency
@@ -570,11 +649,15 @@
             const formData = {
                 tax_year: parseInt(document.getElementById('tax_year').value),
                 filing_status: document.getElementById('filing_status').value,
+                salary1_input_type: document.querySelector('input[name="salary1_input_type"]:checked').value,
                 salary1_frequency: document.getElementById('salary1_frequency').value,
                 salary1_gross: parseFloat(document.getElementById('salary1_gross').value) || 0,
+                salary1_annual: parseFloat(document.getElementById('salary1_annual').value) || 0,
                 dual_income: document.getElementById('dual_income').checked,
+                salary2_input_type: document.querySelector('input[name="salary2_input_type"]:checked')?.value || 'per_period',
                 salary2_frequency: document.getElementById('salary2_frequency').value,
                 salary2_gross: parseFloat(document.getElementById('salary2_gross').value) || 0,
+                salary2_annual: parseFloat(document.getElementById('salary2_annual').value) || 0,
                 income_1099g: parseFloat(document.getElementById('income_1099g').value) || 0,
                 income_1099nec: parseFloat(document.getElementById('income_1099nec').value) || 0,
                 income_1099int_div: parseFloat(document.getElementById('income_1099int_div').value) || 0,

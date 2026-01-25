@@ -35,14 +35,20 @@ def calculate():
 
         # Convert numeric fields
         data['tax_year'] = int(data['tax_year'])
+        data['salary1_input_type'] = data.get('salary1_input_type', 'per_period')
         data['salary1_gross'] = float(data.get('salary1_gross', 0) or 0)
+        data['salary1_annual'] = float(data.get('salary1_annual', 0) or 0)
         data['dual_income'] = bool(data.get('dual_income', False))
 
         if data['dual_income']:
+            data['salary2_input_type'] = data.get('salary2_input_type', 'per_period')
             data['salary2_gross'] = float(data.get('salary2_gross', 0) or 0)
+            data['salary2_annual'] = float(data.get('salary2_annual', 0) or 0)
             data['salary2_frequency'] = data.get('salary2_frequency', 'biweekly')
         else:
+            data['salary2_input_type'] = 'per_period'
             data['salary2_gross'] = 0
+            data['salary2_annual'] = 0
 
         # 1099 income
         data['income_1099g'] = float(data.get('income_1099g', 0) or 0)
