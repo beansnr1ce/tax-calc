@@ -8,9 +8,9 @@ from pathlib import Path
 
 from decimal import Decimal as _Decimal
 
-from .pay_periods import PAY_FREQUENCIES
-from .state_tax import StateEngineRegistry, StateTaxInput
+from .state_tax import StateEngineRegistry
 from .state_tax.states import register_overrides
+from .tax_facts import TaxFacts as _TaxFacts
 from .tax_registry import BracketTable, FilesystemSource, TaxTableRegistry
 
 _DEFAULT_DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "tax_tables"
@@ -187,47 +187,33 @@ def calculate_student_loan_deduction(interest_paid, agi, filing_status, year):
     }
 
 
-def calculate_federal_tax(data):
+def calculate_federal_tax(facts):
     """
     Calculate complete federal tax liability.
+    Accepts a TaxFacts value object.
     """
-    year = data['tax_year']
-    filing_status = data['filing_status']
+    year = facts.tax_year
+    filing_status = facts.filing_status
 
-    # Calculate gross income from all sources
-    salary1_annual = data['salary1_gross'] * PAY_FREQUENCIES.get(data['salary1_frequency'], 26)
-    salary2_annual = 0
-    if data.get('dual_income'):
-        salary2_annual = data.get('salary2_gross', 0) * PAY_FREQUENCIES.get(data.get('salary2_frequency', 'biweekly'), 26)
-
+    salary1_annual = float(facts.salary1.annual)
+    salary2_annual = float(facts.salary2.annual) if facts.salary2 else 0.0
     w2_income = salary1_annual + salary2_annual
 
-    # Additional income (1099s)
-    income_1099g = data.get('income_1099g', 0)
-    income_1099nec = data.get('income_1099nec', 0)
-    income_1099int_div = data.get('income_1099int_div', 0)
-    other_income = data.get('other_income', 0)
-
+    income_1099g = float(facts.income_1099g)
+    income_1099nec = float(facts.income_1099nec)
+    income_1099int_div = float(facts.income_1099int_div)
+    other_income = float(facts.other_income)
     total_additional_income = income_1099g + income_1099nec + income_1099int_div + other_income
 
-    # Self-employment tax calculation
     se_tax = calculate_self_employment_tax(income_1099nec, year)
 
-    # Calculate pre-tax deductions (401k, HSA, etc.)
-    pretax_salary1 = calculate_pretax_deductions(data.get('pretax_deductions_1', {}), data['salary1_frequency'])
-    pretax_salary2 = 0
-    if data.get('dual_income'):
-        pretax_salary2 = calculate_pretax_deductions(data.get('pretax_deductions_2', {}), data.get('salary2_frequency', 'biweekly'))
+    total_pretax = float(facts.total_pretax)
 
-    total_pretax = pretax_salary1 + pretax_salary2
-
-    # Adjusted Gross Income (AGI)
     gross_income = w2_income + total_additional_income
     agi_deductions = total_pretax + se_tax['deduction']
 
-    # Student loan interest deduction
     student_loan = calculate_student_loan_deduction(
-        data.get('student_loan_interest', 0),
+        float(facts.student_loan_interest),
         gross_income - agi_deductions,
         filing_status,
         year
@@ -236,30 +222,24 @@ def calculate_federal_tax(data):
 
     agi = gross_income - agi_deductions
 
-    # Determine deduction (standard vs itemized)
     fed_profile = _get_registry().profile("federal", year, filing_status)
     standard_deduction = _f(fed_profile.standard_deduction)
-    itemized = calculate_itemized_deductions(data.get('itemized_deductions', {}), 'federal', year)
+    itemized = _itemized_for_legacy(facts, 'federal', year)
 
     use_itemized = itemized['total'] > standard_deduction
     deduction_amount = itemized['total'] if use_itemized else standard_deduction
 
-    # Taxable income
     taxable_income = max(0, agi - deduction_amount)
-
-    # Calculate tax using brackets
     tax, bracket_breakdown = calculate_bracket_tax(taxable_income, fed_profile.brackets)
 
-    # Child Tax Credit
     child_credit = calculate_child_tax_credit(
-        data.get('children_under_17', 0),
-        data.get('other_dependents', 0),
+        facts.children_under_17,
+        facts.other_dependents,
         agi,
         filing_status,
         year
     )
 
-    # Final tax after credits
     final_tax = max(0, tax - child_credit['total'])
 
     return {
@@ -285,25 +265,20 @@ def calculate_federal_tax(data):
     }
 
 
-def calculate_pretax_deductions(deductions, frequency):
-    """
-    Calculate annual pre-tax deductions from pay period or annual amounts.
-    """
-    if not deductions:
-        return 0
 
-    periods = PAY_FREQUENCIES.get(frequency, 26)
-    is_annual = deductions.get('input_type') == 'annual'
-
-    total = 0
-    for key in ['_401k', 'ira', 'health_insurance', 'hsa', 'fsa', 'dental', 'vision', 'other']:
-        amount = deductions.get(key, 0) or 0
-        if is_annual:
-            total += amount
-        else:
-            total += amount * periods
-
-    return total
+def _itemized_for_legacy(facts, tax_type, year):
+    """Adapter: build the legacy itemized dict shape from TaxFacts."""
+    return calculate_itemized_deductions(
+        {
+            'charitable': float(facts.itemized.charitable),
+            'mortgage_interest': float(facts.itemized.mortgage_interest),
+            'salt': float(facts.itemized.salt),
+            'medical': float(facts.itemized.medical),
+            'other': float(facts.itemized.other),
+        },
+        tax_type,
+        year,
+    )
 
 
 def calculate_itemized_deductions(deductions, tax_type, year=2025):
@@ -343,19 +318,20 @@ def calculate_itemized_deductions(deductions, tax_type, year=2025):
     return {'total': round(total, 2), 'breakdown': breakdown}
 
 
-def calculate_withholding(data, federal_result, ca_result):
+def calculate_withholding(facts, federal_result, ca_result):
     """
     Calculate current withholding and provide W-4/DE 4 guidance.
+    Accepts a TaxFacts value object.
     """
-    year = data['tax_year']
-    filing_status = data['filing_status']
-    dual_income = data.get('dual_income', False)
+    year = facts.tax_year
+    filing_status = facts.filing_status
+    dual_income = facts.dual_income
 
-    salary1_annual = federal_result['salary1_annual']
-    salary1_periods = PAY_FREQUENCIES.get(data['salary1_frequency'], 26)
+    salary1_annual = float(facts.salary1.annual)
+    salary1_periods = facts.salary1.periods_per_year
 
-    salary2_annual = federal_result['salary2_annual']
-    salary2_periods = PAY_FREQUENCIES.get(data.get('salary2_frequency', 'biweekly'), 26) if dual_income else 0
+    salary2_annual = float(facts.salary2.annual) if facts.salary2 else 0.0
+    salary2_periods = facts.salary2.periods_per_year if facts.salary2 else 0
 
     total_w2_income = salary1_annual + salary2_annual
 
@@ -410,7 +386,7 @@ def calculate_withholding(data, federal_result, ca_result):
         pay_periods=salary1_periods,
         filing_status=filing_status,
         total_ca_tax=total_ca * salary1_pct,
-        num_dependents=data.get('children_under_17', 0) + data.get('other_dependents', 0)
+        num_dependents=facts.children_under_17 + facts.other_dependents,
     )
     de4_guidance.append(de4_1)
 
@@ -636,14 +612,19 @@ def generate_quarterly_guidance(additional_income, se_tax, tax_year):
     }
 
 
-def calculate_all(data):
+def calculate_all(facts):
     """
     Main entry point - calculate all taxes and generate guidance.
+    Accepts a TaxFacts value object (or, for legacy callers, a dict that
+    will be parsed into TaxFacts via build_facts).
     """
-    federal_result = calculate_federal_tax(data)
-    state_code = data.get('state', 'CA')
-    state_result = _compute_state_via_engine(data, federal_result, state_code)
-    withholding = calculate_withholding(data, federal_result, state_result)
+    if not isinstance(facts, _TaxFacts):
+        from .tax_facts import build_facts
+        facts = build_facts(facts, tax_tables=_get_registry(), state_engines=_get_engines())
+
+    federal_result = calculate_federal_tax(facts)
+    state_result = _compute_state_via_engine(facts, federal_result)
+    withholding = calculate_withholding(facts, federal_result, state_result)
 
     return {
         'federal': federal_result,
@@ -651,8 +632,8 @@ def calculate_all(data):
         'state': state_result,        # forward-looking key
         'withholding': withholding,
         'summary': {
-            'tax_year': data['tax_year'],
-            'filing_status': data['filing_status'],
+            'tax_year': facts.tax_year,
+            'filing_status': facts.filing_status,
             'gross_income': federal_result['gross_income'],
             'federal_tax': federal_result['final_tax'],
             'se_tax': federal_result['se_tax']['total'],
@@ -663,28 +644,21 @@ def calculate_all(data):
     }
 
 
-def _compute_state_via_engine(data, federal_result, state_code):
-    """Adapter: run the state engine and shape its result back into the legacy
-    CA-result dict shape (final_tax, sdi: {tax}, ...) so that downstream
-    consumers (calculate_withholding, the UI templates, the goldens) keep
-    working unchanged."""
-    year = data['tax_year']
-    filing_status = data['filing_status']
+def _compute_state_via_engine(facts, federal_result):
+    """Adapter: run the state engine for facts.state and reshape the result into
+    the legacy CA-result dict shape so downstream consumers (calculate_withholding,
+    UI templates, goldens) keep working unchanged."""
+    year = facts.tax_year
+    state_code = facts.state
     fed_itm = (
         _Decimal(str(federal_result['itemized_deduction']['total']))
         if federal_result['use_itemized']
         else _Decimal('0')
     )
-    inp = StateTaxInput(
-        jurisdiction=state_code,
-        year=year,
-        filing_status=filing_status,
-        dependents=int(data.get('children_under_17', 0)) + int(data.get('other_dependents', 0)),
+    inp = facts.to_state_input(
         federal_agi=_Decimal(str(federal_result['agi'])),
         federal_taxable_income=_Decimal(str(federal_result['taxable_income'])),
         federal_itemized=fed_itm,
-        wages_w2=_Decimal(str(federal_result['w2_income'])),
-        self_employment_income=_Decimal(str(data.get('income_1099nec', 0) or 0)),
     )
     engine = _get_engines().get(state_code)
     result = engine.compute(inp)
@@ -697,9 +671,7 @@ def _compute_state_via_engine(data, federal_result, state_code):
     return {
         'agi': float(result.starting_income),
         'standard_deduction': float(result.standard_deduction),
-        'itemized_deduction': calculate_itemized_deductions(
-            data.get('itemized_deductions', {}), 'california', year
-        ),
+        'itemized_deduction': _itemized_for_legacy(facts, 'california', year),
         'use_itemized': result.use_itemized,
         'deduction_used': float(result.deduction_used),
         'taxable_income': float(result.taxable_income),
