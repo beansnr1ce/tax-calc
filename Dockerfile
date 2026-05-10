@@ -6,8 +6,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and tax data
 COPY app/ ./app/
+COPY data/ ./data/
 
 # Expose port
 EXPOSE 5000

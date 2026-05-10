@@ -3,41 +3,80 @@ Core tax calculation engine for federal and California taxes.
 Provides W-4 and DE 4 form guidance.
 """
 
-from .tax_tables import (
-    get_federal_brackets, get_ca_brackets,
-    FEDERAL_STANDARD_DEDUCTION, CA_STANDARD_DEDUCTION,
-    CA_EXEMPTION_CREDIT, CA_SDI, CA_MENTAL_HEALTH_THRESHOLD,
-    SELF_EMPLOYMENT_TAX_RATE, SELF_EMPLOYMENT_SS_WAGE_BASE,
-    CHILD_TAX_CREDIT, STUDENT_LOAN_INTEREST,
-    SALT_CAP, PAY_FREQUENCIES, QUARTERLY_DUE_DATES,
-    IRA_LIMITS, _401K_LIMITS, HSA_LIMITS
-)
+import os
+from pathlib import Path
+
+from decimal import Decimal as _Decimal
+
+from .pay_periods import PAY_FREQUENCIES
+from .state_tax import StateEngineRegistry, StateTaxInput
+from .state_tax.states import register_overrides
+from .tax_registry import BracketTable, FilesystemSource, TaxTableRegistry
+
+_DEFAULT_DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "tax_tables"
+_registry: TaxTableRegistry | None = None
+_engines: StateEngineRegistry | None = None
 
 
-def calculate_bracket_tax(taxable_income, brackets):
+def _get_registry() -> TaxTableRegistry:
+    global _registry
+    if _registry is None:
+        root = Path(os.environ.get("TAX_DATA_ROOT", _DEFAULT_DATA_ROOT))
+        _registry = TaxTableRegistry(source=FilesystemSource(root))
+    return _registry
+
+
+def _get_engines() -> StateEngineRegistry:
+    global _engines
+    if _engines is None:
+        _engines = StateEngineRegistry(registry=_get_registry())
+        register_overrides(_engines)
+    return _engines
+
+
+def _f(value) -> float:
+    """Convert Decimal (or any numeric) to float at the legacy boundary."""
+    return float(value)
+
+
+def _format_due_dates(year: int) -> list:
+    """Format registry's date tuples as [(label, formatted_date), ...] for template."""
+    months = ["January", "February", "March", "April", "May", "June",
+              "July", "August", "September", "October", "November", "December"]
+    dates = _get_registry().quarterly_due_dates(year)
+    return [
+        (f"Q{i + 1}", f"{months[d.month - 1]} {d.day}, {d.year}")
+        for i, d in enumerate(dates)
+    ]
+
+
+def calculate_bracket_tax(taxable_income, bracket_table: BracketTable):
     """
-    Calculate tax using progressive brackets.
+    Calculate tax using progressive brackets (floor-form).
     Returns (total_tax, bracket_breakdown).
     """
     tax = 0
-    prev_limit = 0
     breakdown = []
+    brackets = bracket_table.brackets
 
-    for limit, rate in brackets:
-        if taxable_income <= prev_limit:
+    for i, bracket in enumerate(brackets):
+        floor = _f(bracket.floor)
+        rate = _f(bracket.rate)
+        if taxable_income <= floor:
             break
-        taxable_in_bracket = min(taxable_income, limit) - prev_limit
+        next_floor = _f(brackets[i + 1].floor) if i + 1 < len(brackets) else None
+        top = min(taxable_income, next_floor) if next_floor is not None else taxable_income
+        taxable_in_bracket = top - floor
         if taxable_in_bracket > 0:
             tax_in_bracket = taxable_in_bracket * rate
             tax += tax_in_bracket
             breakdown.append({
-                'bracket_start': prev_limit,
-                'bracket_end': limit if limit != float('inf') else 'unlimited',
+                'bracket_start': floor,
+                'bracket_end': next_floor if next_floor is not None else 'unlimited',
                 'rate': rate * 100,
                 'taxable_amount': taxable_in_bracket,
                 'tax': tax_in_bracket
             })
-        prev_limit = limit
 
     return tax, breakdown
 
@@ -52,7 +91,7 @@ def calculate_self_employment_tax(nec_income, year):
 
     # Net self-employment earnings (92.35% of gross)
     se_earnings = nec_income * 0.9235
-    ss_wage_base = SELF_EMPLOYMENT_SS_WAGE_BASE.get(year, 176100)
+    ss_wage_base = _f(_get_registry().federal_limit(year, "se_tax_ss_wage_base"))
 
     # Social Security portion (12.4% up to wage base)
     ss_taxable = min(se_earnings, ss_wage_base)
@@ -78,36 +117,37 @@ def calculate_self_employment_tax(nec_income, year):
     }
 
 
-def calculate_child_tax_credit(children_under_17, other_dependents, agi, filing_status):
+def calculate_child_tax_credit(children_under_17, other_dependents, agi, filing_status, year=2025):
     """
     Calculate Child Tax Credit with phase-out.
     $2,000 per child under 17, $500 per other dependent.
     Phase-out: $50 reduction per $1,000 over threshold.
     """
-    base_credit = (children_under_17 * CHILD_TAX_CREDIT['under_17'] +
-                   other_dependents * CHILD_TAX_CREDIT['other_dependent'])
+    ctc = _get_registry().extra("federal", year, "child_tax_credit")
+    base_credit = (children_under_17 * _f(ctc["under_17"]) +
+                   other_dependents * _f(ctc["other_dependent"]))
 
     if base_credit == 0:
         return {'total': 0, 'phased_out': 0, 'explanation': 'No dependents claimed'}
 
-    threshold = CHILD_TAX_CREDIT['phase_out_start'].get(filing_status, 200000)
+    threshold = _f(ctc["phase_out_start"].get(filing_status, ctc["phase_out_start"]["single"]))
 
     if agi <= threshold:
         return {
             'total': base_credit,
             'phased_out': 0,
-            'explanation': f'Full credit: AGI ${agi:,.0f} is below phase-out threshold of ${threshold:,}'
+            'explanation': f'Full credit: AGI ${agi:,.0f} is below phase-out threshold of ${threshold:,.0f}'
         }
 
     # Calculate phase-out
     excess = agi - threshold
-    phase_out_amount = (excess // 1000) * CHILD_TAX_CREDIT['phase_out_rate']
+    phase_out_amount = (excess // 1000) * _f(ctc["phase_out_rate"])
     final_credit = max(0, base_credit - phase_out_amount)
 
     return {
         'total': final_credit,
         'phased_out': min(base_credit, phase_out_amount),
-        'explanation': f'Credit reduced by ${phase_out_amount:,.0f} due to AGI ${agi:,.0f} exceeding ${threshold:,} threshold'
+        'explanation': f'Credit reduced by ${phase_out_amount:,.0f} due to AGI ${agi:,.0f} exceeding ${threshold:,.0f} threshold'
     }
 
 
@@ -119,9 +159,11 @@ def calculate_student_loan_deduction(interest_paid, agi, filing_status, year):
     if interest_paid <= 0:
         return {'deduction': 0, 'explanation': 'No student loan interest entered'}
 
-    max_deduction = min(interest_paid, STUDENT_LOAN_INTEREST['max_deduction'])
-    phase_out_start = STUDENT_LOAN_INTEREST['phase_out_start'][year].get(filing_status, 80000)
-    phase_out_range = STUDENT_LOAN_INTEREST['phase_out_range'].get(filing_status, 15000)
+    reg = _get_registry()
+    max_deduction = min(interest_paid, _f(reg.federal_limit(year, "student_loan_max_deduction")))
+    phase_out = reg.extra("federal", year, "student_loan_phase_out")
+    phase_out_start = _f(phase_out["start"].get(filing_status, phase_out["start"]["single"]))
+    phase_out_range = _f(phase_out["range"].get(filing_status, phase_out["range"]["single"]))
 
     if agi <= phase_out_start:
         return {
@@ -142,22 +184,6 @@ def calculate_student_loan_deduction(interest_paid, agi, filing_status, year):
     return {
         'deduction': round(reduced_deduction, 2),
         'explanation': f'Partially phased out: ${reduced_deduction:,.0f} deduction (reduced {phase_out_pct*100:.0f}%)'
-    }
-
-
-def calculate_ca_sdi(wages, year):
-    """
-    Calculate California State Disability Insurance.
-    """
-    sdi_info = CA_SDI.get(year, CA_SDI[2025])
-    taxable_wages = min(wages, sdi_info['wage_base'])
-    sdi_tax = taxable_wages * sdi_info['rate']
-
-    return {
-        'tax': round(sdi_tax, 2),
-        'rate': sdi_info['rate'] * 100,
-        'wage_base': sdi_info['wage_base'],
-        'taxable_wages': taxable_wages
     }
 
 
@@ -211,8 +237,9 @@ def calculate_federal_tax(data):
     agi = gross_income - agi_deductions
 
     # Determine deduction (standard vs itemized)
-    standard_deduction = FEDERAL_STANDARD_DEDUCTION[year][filing_status]
-    itemized = calculate_itemized_deductions(data.get('itemized_deductions', {}), 'federal')
+    fed_profile = _get_registry().profile("federal", year, filing_status)
+    standard_deduction = _f(fed_profile.standard_deduction)
+    itemized = calculate_itemized_deductions(data.get('itemized_deductions', {}), 'federal', year)
 
     use_itemized = itemized['total'] > standard_deduction
     deduction_amount = itemized['total'] if use_itemized else standard_deduction
@@ -221,15 +248,15 @@ def calculate_federal_tax(data):
     taxable_income = max(0, agi - deduction_amount)
 
     # Calculate tax using brackets
-    brackets = get_federal_brackets(year, filing_status)
-    tax, bracket_breakdown = calculate_bracket_tax(taxable_income, brackets)
+    tax, bracket_breakdown = calculate_bracket_tax(taxable_income, fed_profile.brackets)
 
     # Child Tax Credit
     child_credit = calculate_child_tax_credit(
         data.get('children_under_17', 0),
         data.get('other_dependents', 0),
         agi,
-        filing_status
+        filing_status,
+        year
     )
 
     # Final tax after credits
@@ -258,71 +285,6 @@ def calculate_federal_tax(data):
     }
 
 
-def calculate_california_tax(data, federal_result):
-    """
-    Calculate California state tax liability.
-    """
-    year = data['tax_year']
-    filing_status = data['filing_status']
-
-    # California uses same income as federal with some adjustments
-    agi = federal_result['agi']
-
-    # California standard deduction
-    standard_deduction = CA_STANDARD_DEDUCTION[year][filing_status]
-
-    # California itemized (different rules - no SALT cap for state)
-    itemized = calculate_itemized_deductions(data.get('itemized_deductions', {}), 'california')
-
-    use_itemized = itemized['total'] > standard_deduction
-    deduction_amount = itemized['total'] if use_itemized else standard_deduction
-
-    # Taxable income
-    taxable_income = max(0, agi - deduction_amount)
-
-    # Calculate tax using CA brackets
-    brackets = get_ca_brackets(year, filing_status)
-    tax, bracket_breakdown = calculate_bracket_tax(taxable_income, brackets)
-
-    # Mental Health Services Tax (additional 1% on income over $1M)
-    mental_health_tax = 0
-    if taxable_income > CA_MENTAL_HEALTH_THRESHOLD:
-        mental_health_tax = (taxable_income - CA_MENTAL_HEALTH_THRESHOLD) * 0.01
-
-    # California Exemption Credit
-    exemption_credit = CA_EXEMPTION_CREDIT[year][filing_status]
-
-    # Dependent exemption credits
-    num_dependents = data.get('children_under_17', 0) + data.get('other_dependents', 0)
-    dependent_credit = num_dependents * 446  # 2025 value
-
-    total_credits = exemption_credit + dependent_credit
-
-    # Final tax
-    final_tax = max(0, tax + mental_health_tax - total_credits)
-
-    # SDI calculation
-    w2_income = federal_result['w2_income']
-    sdi = calculate_ca_sdi(w2_income, year)
-
-    return {
-        'agi': round(agi, 2),
-        'standard_deduction': standard_deduction,
-        'itemized_deduction': itemized,
-        'use_itemized': use_itemized,
-        'deduction_used': round(deduction_amount, 2),
-        'taxable_income': round(taxable_income, 2),
-        'tax_before_credits': round(tax, 2),
-        'bracket_breakdown': bracket_breakdown,
-        'mental_health_tax': round(mental_health_tax, 2),
-        'exemption_credit': exemption_credit,
-        'dependent_credit': dependent_credit,
-        'total_credits': total_credits,
-        'final_tax': round(final_tax, 2),
-        'sdi': sdi
-    }
-
-
 def calculate_pretax_deductions(deductions, frequency):
     """
     Calculate annual pre-tax deductions from pay period or annual amounts.
@@ -344,7 +306,7 @@ def calculate_pretax_deductions(deductions, frequency):
     return total
 
 
-def calculate_itemized_deductions(deductions, tax_type):
+def calculate_itemized_deductions(deductions, tax_type, year=2025):
     """
     Calculate itemized deductions for federal or California.
     """
@@ -365,10 +327,10 @@ def calculate_itemized_deductions(deductions, tax_type):
     }
 
     if tax_type == 'federal':
-        # Federal SALT cap of $10,000
-        salt_allowed = min(salt, SALT_CAP)
+        salt_cap = _f(_get_registry().federal_limit(year, "salt_cap"))
+        salt_allowed = min(salt, salt_cap)
         breakdown['salt'] = salt_allowed
-        breakdown['salt_capped'] = salt > SALT_CAP
+        breakdown['salt_capped'] = salt > salt_cap
         breakdown['salt_original'] = salt
     else:
         # California has no SALT cap (but doesn't allow SALT deduction for CA taxes paid)
@@ -615,8 +577,8 @@ def estimate_standard_withholding(annual_salary, filing_status, dual_income):
     Estimate standard federal withholding without any W-4 adjustments.
     This is a simplified approximation.
     """
-    # Use 2025 standard deduction
-    std_deduction = FEDERAL_STANDARD_DEDUCTION[2025][filing_status]
+    fed_profile = _get_registry().profile("federal", 2025, filing_status)
+    std_deduction = _f(fed_profile.standard_deduction)
 
     # If dual income with married status, adjust
     if dual_income and filing_status == 'married_jointly':
@@ -624,8 +586,7 @@ def estimate_standard_withholding(annual_salary, filing_status, dual_income):
         std_deduction = std_deduction / 2
 
     taxable = max(0, annual_salary - std_deduction)
-    brackets = get_federal_brackets(2025, filing_status)
-    tax, _ = calculate_bracket_tax(taxable, brackets)
+    tax, _ = calculate_bracket_tax(taxable, fed_profile.brackets)
 
     return tax
 
@@ -638,8 +599,8 @@ def estimate_ca_withholding(annual_salary, allowances):
     allowance_value = 4800
     taxable = max(0, annual_salary - (allowances * allowance_value))
 
-    brackets = get_ca_brackets(2025, 'single')
-    tax, _ = calculate_bracket_tax(taxable, brackets)
+    ca_profile = _get_registry().profile("CA", 2025, "single")
+    tax, _ = calculate_bracket_tax(taxable, ca_profile.brackets)
 
     return tax
 
@@ -660,7 +621,7 @@ def generate_quarterly_guidance(additional_income, se_tax, tax_year):
     quarterly_federal = total_quarterly_federal / 4
     quarterly_ca = ca_on_additional / 4
 
-    due_dates = QUARTERLY_DUE_DATES.get(tax_year, QUARTERLY_DUE_DATES[2025])
+    due_dates = _format_due_dates(tax_year)
 
     return {
         'has_1099_income': True,
@@ -680,12 +641,14 @@ def calculate_all(data):
     Main entry point - calculate all taxes and generate guidance.
     """
     federal_result = calculate_federal_tax(data)
-    ca_result = calculate_california_tax(data, federal_result)
-    withholding = calculate_withholding(data, federal_result, ca_result)
+    state_code = data.get('state', 'CA')
+    state_result = _compute_state_via_engine(data, federal_result, state_code)
+    withholding = calculate_withholding(data, federal_result, state_result)
 
     return {
         'federal': federal_result,
-        'california': ca_result,
+        'california': state_result,  # backwards-compat key for existing UI/goldens
+        'state': state_result,        # forward-looking key
         'withholding': withholding,
         'summary': {
             'tax_year': data['tax_year'],
@@ -693,8 +656,68 @@ def calculate_all(data):
             'gross_income': federal_result['gross_income'],
             'federal_tax': federal_result['final_tax'],
             'se_tax': federal_result['se_tax']['total'],
-            'california_tax': ca_result['final_tax'],
-            'ca_sdi': ca_result['sdi']['tax'],
+            'california_tax': state_result['final_tax'],
+            'ca_sdi': state_result['sdi']['tax'],
             'total_tax': withholding['totals']['grand_total']
         }
+    }
+
+
+def _compute_state_via_engine(data, federal_result, state_code):
+    """Adapter: run the state engine and shape its result back into the legacy
+    CA-result dict shape (final_tax, sdi: {tax}, ...) so that downstream
+    consumers (calculate_withholding, the UI templates, the goldens) keep
+    working unchanged."""
+    year = data['tax_year']
+    filing_status = data['filing_status']
+    fed_itm = (
+        _Decimal(str(federal_result['itemized_deduction']['total']))
+        if federal_result['use_itemized']
+        else _Decimal('0')
+    )
+    inp = StateTaxInput(
+        jurisdiction=state_code,
+        year=year,
+        filing_status=filing_status,
+        dependents=int(data.get('children_under_17', 0)) + int(data.get('other_dependents', 0)),
+        federal_agi=_Decimal(str(federal_result['agi'])),
+        federal_taxable_income=_Decimal(str(federal_result['taxable_income'])),
+        federal_itemized=fed_itm,
+        wages_w2=_Decimal(str(federal_result['w2_income'])),
+        self_employment_income=_Decimal(str(data.get('income_1099nec', 0) or 0)),
+    )
+    engine = _get_engines().get(state_code)
+    result = engine.compute(inp)
+
+    # Reshape to legacy CA-result dict
+    sdi_value = float(result.addons.get('sdi', _Decimal('0')))
+    mhst_value = float(result.surcharges.get('mhst', _Decimal('0')))
+    exemption_value = float(result.credits.get('exemption', _Decimal('0')))
+    dependent_value = float(result.credits.get('dependent', _Decimal('0')))
+    return {
+        'agi': float(result.starting_income),
+        'standard_deduction': float(result.standard_deduction),
+        'itemized_deduction': calculate_itemized_deductions(
+            data.get('itemized_deductions', {}), 'california', year
+        ),
+        'use_itemized': result.use_itemized,
+        'deduction_used': float(result.deduction_used),
+        'taxable_income': float(result.taxable_income),
+        'tax_before_credits': float(result.tax_before_credits),
+        'bracket_breakdown': [],  # engine doesn't surface this yet
+        'mental_health_tax': mhst_value,
+        'exemption_credit': exemption_value,
+        'dependent_credit': dependent_value,
+        'total_credits': exemption_value + dependent_value,
+        'final_tax': float(result.final_tax),
+        'sdi': {
+            'tax': sdi_value,
+            'rate': float(_get_registry().extra(state_code, year, 'sdi')['rate']) * 100
+                if state_code == 'CA' else 0,
+            'wage_base': float(_get_registry().extra(state_code, year, 'sdi')['wage_base'])
+                if state_code == 'CA' else 0,
+            'taxable_wages': min(float(inp.wages_w2),
+                float(_get_registry().extra(state_code, year, 'sdi')['wage_base']))
+                if state_code == 'CA' else 0,
+        },
     }

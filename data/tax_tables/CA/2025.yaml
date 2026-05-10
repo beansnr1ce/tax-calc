@@ -1,0 +1,52 @@
+kind: progressive
+filing_statuses:
+  single:
+    brackets:
+      - {floor: "0",      rate: "0.01"}
+      - {floor: "10756",  rate: "0.02"}
+      - {floor: "25499",  rate: "0.04"}
+      - {floor: "40243",  rate: "0.06"}
+      - {floor: "55866",  rate: "0.08"}
+      - {floor: "70606",  rate: "0.093"}
+      - {floor: "360659", rate: "0.103"}
+      - {floor: "432791", rate: "0.113"}
+      - {floor: "721319", rate: "0.123"}
+    standard_deduction: "5540"
+    dependent_credit: "0"
+  married_jointly:
+    brackets:
+      - {floor: "0",       rate: "0.01"}
+      - {floor: "21512",   rate: "0.02"}
+      - {floor: "50998",   rate: "0.04"}
+      - {floor: "80486",   rate: "0.06"}
+      - {floor: "111732",  rate: "0.08"}
+      - {floor: "141212",  rate: "0.093"}
+      - {floor: "721318",  rate: "0.103"}
+      - {floor: "865582",  rate: "0.113"}
+      - {floor: "1442638", rate: "0.123"}
+    standard_deduction: "11080"
+    dependent_credit: "0"
+  head_of_household:
+    brackets:
+      - {floor: "0",      rate: "0.01"}
+      - {floor: "21527",  rate: "0.02"}
+      - {floor: "51011",  rate: "0.04"}
+      - {floor: "65755",  rate: "0.06"}
+      - {floor: "81378",  rate: "0.08"}
+      - {floor: "96118",  rate: "0.093"}
+      - {floor: "490493", rate: "0.103"}
+      - {floor: "588593", rate: "0.113"}
+      - {floor: "980987", rate: "0.123"}
+    standard_deduction: "11080"
+    dependent_credit: "0"
+extras:
+  exemption_credit:
+    single: "144"
+    married_jointly: "288"
+    head_of_household: "144"
+  dependent_exemption_credit: "446"
+  sdi:
+    rate: "0.012"
+    wage_base: "174668"
+  mental_health_threshold: "1000000"
+  mental_health_rate: "0.01"

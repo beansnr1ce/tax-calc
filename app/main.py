@@ -2,21 +2,30 @@
 Flask application for the Tax Withholding Calculator.
 """
 
+import os
+from pathlib import Path
+
 from flask import Flask, render_template, request, jsonify
+from .state_tax import StateEngineRegistry
+from .state_tax.states import register_overrides
 from .tax_calculator import calculate_all
-from .tax_tables import IRA_LIMITS, _401K_LIMITS, HSA_LIMITS, PAY_FREQUENCIES
+from .tax_registry import FilesystemSource, TaxTableRegistry
 
 app = Flask(__name__)
+
+_DEFAULT_DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "tax_tables"
+_data_root = Path(os.environ.get("TAX_DATA_ROOT", _DEFAULT_DATA_ROOT))
+_tax_tables = TaxTableRegistry(source=FilesystemSource(_data_root))
+app.extensions["tax_tables"] = _tax_tables
+_state_engines = StateEngineRegistry(registry=_tax_tables)
+register_overrides(_state_engines)
+app.extensions["state_engines"] = _state_engines
 
 
 @app.route('/')
 def index():
     """Render the main calculator page."""
-    return render_template('index.html',
-                           ira_limits=IRA_LIMITS,
-                           limits_401k=_401K_LIMITS,
-                           hsa_limits=HSA_LIMITS,
-                           pay_frequencies=list(PAY_FREQUENCIES.keys()))
+    return render_template('index.html')
 
 
 @app.route('/calculate', methods=['POST'])
