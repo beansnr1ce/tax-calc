@@ -1,0 +1,69 @@
+kind: progressive
+filing_statuses:
+  single:
+    brackets:
+      - {floor: "0",      rate: "0.10"}
+      - {floor: "12250",  rate: "0.12"}
+      - {floor: "49825",  rate: "0.22"}
+      - {floor: "106250", rate: "0.24"}
+      - {floor: "202825", rate: "0.32"}
+      - {floor: "257525", rate: "0.35"}
+      - {floor: "643900", rate: "0.37"}
+    standard_deduction: "15400"
+    dependent_credit: "0"
+  married_jointly:
+    brackets:
+      - {floor: "0",      rate: "0.10"}
+      - {floor: "24500",  rate: "0.12"}
+      - {floor: "99650",  rate: "0.22"}
+      - {floor: "212500", rate: "0.24"}
+      - {floor: "405650", rate: "0.32"}
+      - {floor: "515100", rate: "0.35"}
+      - {floor: "772650", rate: "0.37"}
+    standard_deduction: "30800"
+    dependent_credit: "0"
+  head_of_household:
+    brackets:
+      - {floor: "0",      rate: "0.10"}
+      - {floor: "17475",  rate: "0.12"}
+      - {floor: "66675",  rate: "0.22"}
+      - {floor: "106250", rate: "0.24"}
+      - {floor: "202825", rate: "0.32"}
+      - {floor: "257500", rate: "0.35"}
+      - {floor: "643900", rate: "0.37"}
+    standard_deduction: "23100"
+    dependent_credit: "0"
+limits:
+  "401k_employee_deferral":     "24000"
+  "401k_catch_up_50plus":       "31500"
+  "ira_regular":                "7000"
+  "ira_catch_up_50plus":        "8000"
+  "hsa_self_only":              "4400"
+  "hsa_family":                 "8750"
+  "salt_cap":                   "10000"
+  "se_tax_ss_wage_base":        "181200"
+  "se_tax_rate":                "0.153"
+  "student_loan_max_deduction": "2500"
+quarterly_due_dates:
+  - "2026-04-15"
+  - "2026-06-15"
+  - "2026-09-15"
+  - "2027-01-15"
+extras:
+  child_tax_credit:
+    under_17: "2000"
+    other_dependent: "500"
+    phase_out_start:
+      single: "200000"
+      married_jointly: "400000"
+      head_of_household: "200000"
+    phase_out_rate: "50"
+  student_loan_phase_out:
+    start:
+      single: "82000"
+      married_jointly: "169000"
+      head_of_household: "82000"
+    range:
+      single: "15000"
+      married_jointly: "30000"
+      head_of_household: "15000"
