@@ -8,7 +8,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify
 from .state_tax import StateEngineRegistry
 from .state_tax.states import register_overrides
-from .tax_calculator import calculate_all
+from .tax_calculator import TaxPipeline
 from .tax_facts import FactsError, build_facts
 from .tax_registry import FilesystemSource, TaxTableRegistry
 
@@ -17,10 +17,12 @@ app = Flask(__name__)
 _DEFAULT_DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "tax_tables"
 _data_root = Path(os.environ.get("TAX_DATA_ROOT", _DEFAULT_DATA_ROOT))
 _tax_tables = TaxTableRegistry(source=FilesystemSource(_data_root))
-app.extensions["tax_tables"] = _tax_tables
 _state_engines = StateEngineRegistry(registry=_tax_tables)
 register_overrides(_state_engines)
+_pipeline = TaxPipeline(_tax_tables, _state_engines)
+app.extensions["tax_tables"] = _tax_tables
 app.extensions["state_engines"] = _state_engines
+app.extensions["pipeline"] = _pipeline
 
 
 @app.route('/')
@@ -34,11 +36,12 @@ def calculate():
     """
     Calculate taxes based on form input and return W-4/DE 4 guidance.
     """
+    pipeline: TaxPipeline = app.extensions["pipeline"]
     try:
         facts = build_facts(
             request.get_json() or {},
-            tax_tables=app.extensions["tax_tables"],
-            state_engines=app.extensions["state_engines"],
+            tax_tables=pipeline.tax_tables,
+            state_engines=pipeline.state_engines,
         )
     except FactsError as e:
         return jsonify({
@@ -51,7 +54,7 @@ def calculate():
         }), 422
 
     try:
-        return jsonify(calculate_all(facts))
+        return jsonify(pipeline.calculate_all(facts))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

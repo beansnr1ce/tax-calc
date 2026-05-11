@@ -1,6 +1,7 @@
 from .exceptions import MissingTaxYear, TaxTableSchemaError
 from .models import (
     Bracket,
+    BracketLine,
     BracketTable,
     TaxYearProfile,
 )
@@ -9,6 +10,7 @@ from .sources import FilesystemSource, InMemorySource
 
 __all__ = [
     "Bracket",
+    "BracketLine",
     "BracketTable",
     "FilesystemSource",
     "InMemorySource",
