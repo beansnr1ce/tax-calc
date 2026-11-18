@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Annual Tax Projection</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.5;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { margin-bottom: 5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .subtitle a { color: #007bff; text-decoration: none; }
+        .subtitle a:hover { text-decoration: underline; }
+        .section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .section h2 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #333;
+            font-size: 1.2em;
+        }
+        .form-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .form-group { flex: 1; min-width: 200px; }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1em;
+        }
+        input:focus, select:focus { outline: none; border-color: #007bff; }
+        .note { font-size: 0.8em; color: #666; margin-top: 3px; }
+        .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
+        .toggle-row input[type="checkbox"] { width: auto; }
+        .hidden { display: none; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.1em;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #results { display: none; margin-top: 15px; }
+        .result-section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .result-section h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .tax-summary { background: #f8f9fa; padding: 15px; border-radius: 6px; }
+        .tax-summary .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .tax-summary .row:last-child { border-bottom: none; }
+        .tax-summary .row.total {
+            font-weight: bold;
+            font-size: 1.2em;
+            border-top: 2px solid #333;
+            margin-top: 10px;
+            padding-top: 15px;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .error ul { margin: 5px 0 0 0; padding-left: 20px; }
+        @media (max-width: 600px) { .form-group { min-width: 100%; } }
+    </style>
+</head>
+<body>
+    <h1>Annual Tax Projection</h1>
+    <p class="subtitle">Estimate your yearly tax liability from your annual salary.
+        <a href="/">&larr; Back to Withholding Calculator</a></p>
+
+    <form id="projectionForm">
+        <div class="section">
+            <h2>Filing Information</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="tax_year">Tax Year</label>
+                    <select id="tax_year" name="tax_year" required>
+                        {% for y in years %}
+                        <option value="{{ y }}"{% if loop.last %} selected{% endif %}>{{ y }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="filing_status">Filing Status</label>
+                    <select id="filing_status" name="filing_status" required>
+                        <option value="single">Single</option>
+                        <option value="married_jointly">Married Filing Jointly</option>
+                        <option value="head_of_household">Head of Household</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="state">State</label>
+                    <select id="state" name="state" required>
+                        {% for s in states %}
+                        <option value="{{ s }}"{% if s == "CA" %} selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Annual Salary</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="salary1_annual">Salary 1 (annual gross)</label>
+                    <input type="number" id="salary1_annual" name="salary1_annual" min="0" step="0.01" required>
+                </div>
+            </div>
+            <div class="toggle-row">
+                <input type="checkbox" id="dual_income" name="dual_income">
+                <label for="dual_income" style="margin: 0;">Add a second salary</label>
+            </div>
+            <div class="form-row hidden" id="salary2Row">
+                <div class="form-group">
+                    <label for="salary2_annual">Salary 2 (annual gross)</label>
+                    <input type="number" id="salary2_annual" name="salary2_annual" min="0" step="0.01">
+                    <div class="note">For a spouse or second job.</div>
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" id="submitBtn">Project My Taxes</button>
+    </form>
+
+    <div id="results"></div>
+
+    <script>
+        const LIABILITY_LABELS = {
+            federal_income_tax: 'Federal income tax',
+            self_employment_tax: 'Self-employment tax',
+            state_income_tax: 'State income tax',
+            state_sdi: 'State disability insurance (SDI)',
+            social_security: 'Social Security',
+            medicare: 'Medicare (incl. Additional Medicare)',
+        };
+
+        const dualIncome = document.getElementById('dual_income');
+        dualIncome.addEventListener('change', () => {
+            document.getElementById('salary2Row').classList.toggle('hidden', !dualIncome.checked);
+        });
+
+        function money(s) {
+            return Number(s).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = String(s);
+            return div.innerHTML;
+        }
+
+        function buildPayload() {
+            const payload = {
+                tax_year: parseInt(document.getElementById('tax_year').value),
+                filing_status: document.getElementById('filing_status').value,
+                state: document.getElementById('state').value,
+                salary1_annual: document.getElementById('salary1_annual').value,
+            };
+            if (dualIncome.checked) {
+                payload.dual_income = true;
+                payload.salary2_annual = document.getElementById('salary2_annual').value;
+            }
+            return payload;
+        }
+
+        function displayErrors(body) {
+            const items = (body.fields || []).map(f => `<li>${escapeHtml(f.message)}</li>`).join('');
+            const msg = items ? `<ul>${items}</ul>` : escapeHtml(body.error || 'Request failed');
+            return `<div class="error"><strong>Please fix the following:</strong>${msg}</div>`;
+        }
+
+        function displayResults(r) {
+            const rows = Object.entries(r.liabilities)
+                .filter(([key, value]) => Number(value) !== 0 || key === 'federal_income_tax' || key === 'state_income_tax')
+                .map(([key, value]) => `
+                    <div class="row"><span>${escapeHtml(LIABILITY_LABELS[key] || key)}</span><span>${money(value)}</span></div>`)
+                .join('');
+            return `
+                <div class="result-section">
+                    <h2>Projected ${escapeHtml(r.tax_year)} Taxes (${escapeHtml(r.state)})</h2>
+                    <div class="tax-summary">
+                        <div class="row"><span>Gross income</span><span>${money(r.gross_income)}</span></div>
+                        ${rows}
+                        <div class="row total"><span>Total projected tax</span><span>${money(r.total_liability)}</span></div>
+                        <div class="row"><span>Effective rate</span><span>${(Number(r.effective_rate) * 100).toFixed(2)}%</span></div>
+                    </div>
+                </div>`;
+        }
+
+        document.getElementById('projectionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const results = document.getElementById('results');
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildPayload()),
+                });
+                const body = await resp.json();
+                results.innerHTML = resp.ok ? displayResults(body) : displayErrors(body);
+            } catch (err) {
+                results.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+            } finally {
+                results.style.display = 'block';
+                btn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

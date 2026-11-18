@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .federal_tax import FederalEngine, FederalResult
+from .projection import ProjectionEngine, ProjectionResult
 from .state_tax import StateEngineRegistry
 from .state_tax.states import register_overrides
 from .tax_facts import TaxFacts, build_facts
@@ -34,6 +35,7 @@ class TaxPipeline:
         self._tables = tax_tables
         self._engines = state_engines
         self._fed = FederalEngine(tax_tables)
+        self._projection = ProjectionEngine(tax_tables, state_engines, self._fed)
 
     @property
     def tax_tables(self) -> TaxTableRegistry:
@@ -45,6 +47,10 @@ class TaxPipeline:
 
     def compute_federal(self, facts: TaxFacts) -> FederalResult:
         return self._fed.compute(facts)
+
+    def project(self, raw_inputs: Mapping[str, Any]) -> ProjectionResult:
+        """Annual Tax Projection. Raises FactsError on invalid input."""
+        return self._projection.project(raw_inputs)
 
     def calculate_all(self, facts: TaxFacts | Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(facts, TaxFacts):

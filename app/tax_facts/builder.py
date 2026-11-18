@@ -34,14 +34,39 @@ def build_facts(
     *,
     tax_tables: TaxTableRegistry,
     state_engines=None,
+    require_frequency: bool = True,
 ) -> TaxFacts:
+    """Normalize a raw payload into TaxFacts.
+
+    Each salary may be given per period (`salaryN_gross` + `salaryN_frequency`)
+    or annually (`salaryN_annual`). With `require_frequency=False` (the
+    projection path) an annual salary needs no pay frequency; the withholding
+    calculator keeps the default, since its math is per paycheck.
+    """
     errors: list[FieldError] = []
 
     tax_year = _required_int(payload, "tax_year", errors)
     filing_status = _required_str(payload, "filing_status", errors)
     state = payload.get("state") or "CA"
-    salary1_gross = _required_decimal(payload, "salary1_gross", errors, non_negative=True)
-    salary1_frequency = _required_str(payload, "salary1_frequency", errors)
+    salary1_by_annual = not _is_missing(payload.get("salary1_annual"))
+    if salary1_by_annual:
+        salary1_amount = _required_decimal(payload, "salary1_annual", errors, non_negative=True)
+    elif _is_missing(payload.get("salary1_gross")):
+        salary1_amount = None
+        errors.append(
+            FieldError(
+                field="salary1_gross",
+                code="missing",
+                message="salary1_gross (per paycheck) or salary1_annual is required",
+            )
+        )
+    else:
+        salary1_amount = _required_decimal(payload, "salary1_gross", errors, non_negative=True)
+    if require_frequency or not salary1_by_annual:
+        salary1_frequency = _required_str(payload, "salary1_frequency", errors)
+    else:
+        raw_freq = payload.get("salary1_frequency")
+        salary1_frequency = None if _is_missing(raw_freq) else str(raw_freq)
 
     if filing_status is not None and filing_status not in _VALID_FILING_STATUSES:
         errors.append(
@@ -89,17 +114,24 @@ def build_facts(
     dual_income = bool(payload.get("dual_income", False))
     salary2 = None
     if dual_income:
-        salary2 = _build_salary(payload, "salary2", errors, default_freq="biweekly")
+        salary2 = _build_salary(
+            payload,
+            "salary2",
+            errors,
+            default_freq="biweekly",
+            require_frequency=require_frequency,
+        )
 
     if errors:
         raise FactsError(errors)
 
-    salary1_periods = PAY_FREQUENCIES[salary1_frequency]
+    salary1_periods = PAY_FREQUENCIES[salary1_frequency] if salary1_frequency else None
     salary1_pretax = _build_pretax(payload, "pretax_deductions_1", salary1_periods, errors)
 
     if salary2 is not None:
-        salary2_periods = PAY_FREQUENCIES[salary2.frequency]
-        salary2_pretax = _build_pretax(payload, "pretax_deductions_2", salary2_periods, errors)
+        salary2_pretax = _build_pretax(
+            payload, "pretax_deductions_2", salary2.periods_per_year, errors
+        )
         salary2 = SalaryFacts(
             gross_per_period=salary2.gross_per_period,
             frequency=salary2.frequency,
@@ -108,12 +140,8 @@ def build_facts(
             pretax=salary2_pretax,
         )
 
-    salary1 = SalaryFacts(
-        gross_per_period=salary1_gross,
-        frequency=salary1_frequency,
-        periods_per_year=salary1_periods,
-        annual=salary1_gross * salary1_periods,
-        pretax=salary1_pretax,
+    salary1 = _salary_facts(
+        salary1_amount, salary1_by_annual, salary1_frequency, salary1_pretax
     )
 
     itemized = _build_itemized(payload, errors)
@@ -146,19 +174,26 @@ def _build_salary(
     errors: list[FieldError],
     *,
     default_freq: str,
+    require_frequency: bool = True,
 ) -> SalaryFacts | None:
-    gross = _required_decimal(payload, f"{prefix}_gross", errors, non_negative=True)
-    if gross is not None and gross == 0:
+    by_annual = not _is_missing(payload.get(f"{prefix}_annual"))
+    amount_field = f"{prefix}_annual" if by_annual else f"{prefix}_gross"
+    amount = _required_decimal(payload, amount_field, errors, non_negative=True)
+    if amount is not None and amount == 0:
         errors.append(
             FieldError(
-                field=f"{prefix}_gross",
+                field=amount_field,
                 code="range",
-                message=f"{prefix}_gross must be > 0 when dual_income is true",
+                message=f"{amount_field} must be > 0 when dual_income is true",
             )
         )
         return None
-    freq = payload.get(f"{prefix}_frequency", default_freq)
-    if freq not in PAY_FREQUENCIES:
+    if by_annual and not require_frequency:
+        freq = payload.get(f"{prefix}_frequency")
+        freq = None if _is_missing(freq) else freq
+    else:
+        freq = payload.get(f"{prefix}_frequency", default_freq)
+    if freq is not None and freq not in PAY_FREQUENCIES:
         errors.append(
             FieldError(
                 field=f"{prefix}_frequency",
@@ -168,26 +203,51 @@ def _build_salary(
             )
         )
         return None
-    if gross is None:
+    if amount is None:
         return None
-    periods = PAY_FREQUENCIES[freq]
+    return _salary_facts(amount, by_annual, freq, PretaxDeductions())
+
+
+def _salary_facts(
+    amount: Decimal,
+    by_annual: bool,
+    frequency: str | None,
+    pretax: PretaxDeductions,
+) -> SalaryFacts:
+    periods = PAY_FREQUENCIES[frequency] if frequency else None
+    if by_annual:
+        annual = amount
+        per_period = amount / periods if periods else None
+    else:
+        annual = amount * periods
+        per_period = amount
     return SalaryFacts(
-        gross_per_period=gross,
-        frequency=freq,
+        gross_per_period=per_period,
+        frequency=frequency,
         periods_per_year=periods,
-        annual=gross * periods,
-        pretax=PretaxDeductions(),
+        annual=annual,
+        pretax=pretax,
     )
 
 
 def _build_pretax(
     payload: Mapping[str, Any],
     key: str,
-    periods: int,
+    periods: int | None,
     errors: list[FieldError],
 ) -> PretaxDeductions:
     raw = payload.get(key) or {}
     input_type = raw.get("input_type", "per_period")
+    if input_type == "per_period" and periods is None:
+        if any(raw.get(f) for f in _PRETAX_FIELDS):
+            errors.append(
+                FieldError(
+                    field=f"{key}.input_type",
+                    code="frequency_required",
+                    message=f"{key} given per paycheck requires a pay frequency",
+                )
+            )
+        return PretaxDeductions()
     multiplier = periods if input_type == "per_period" else 1
     values = {}
     for fname in _PRETAX_FIELDS:

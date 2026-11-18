@@ -34,12 +34,21 @@ class PretaxDeductions:
             + self.other
         )
 
+    @property
+    def section_125(self) -> Decimal:
+        """Cafeteria-plan deductions (health/dental/vision/FSA/HSA via payroll).
+        These reduce payroll-tax wages (FICA, CA SDI); 401(k), IRA and
+        `other` do not."""
+        return self.health_insurance + self.dental + self.vision + self.fsa + self.hsa
+
 
 @dataclass(frozen=True)
 class SalaryFacts:
-    gross_per_period: Decimal
-    frequency: str
-    periods_per_year: int
+    """`annual` is always set. Per-period fields are None when the salary was
+    given annually without a pay frequency (projection path only)."""
+    gross_per_period: Decimal | None
+    frequency: str | None
+    periods_per_year: int | None
     annual: Decimal
     pretax: PretaxDeductions
 
