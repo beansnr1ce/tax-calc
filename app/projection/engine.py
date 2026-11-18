@@ -6,6 +6,7 @@ Deliberately does not go through the legacy `calculate_all` dict.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any, Mapping
 
@@ -14,6 +15,7 @@ from app.state_tax import StateEngineRegistry
 from app.tax_facts import FactsError, FieldError, SalaryFacts, TaxFacts, build_facts
 from app.tax_registry import TaxTableRegistry
 
+from . import ytd as ytd_mod
 from .result import EmployeeFica, Liabilities, ProjectionResult
 
 _ZERO = Decimal("0")
@@ -30,8 +32,18 @@ class ProjectionEngine:
         self._engines = state_engines
         self._fed = federal_engine or FederalEngine(tax_tables)
 
-    def project(self, raw_inputs: Mapping[str, Any]) -> ProjectionResult:
-        facts = self._build_facts(raw_inputs)
+    def project(
+        self, raw_inputs: Mapping[str, Any], *, as_of: date | None = None
+    ) -> ProjectionResult:
+        """`as_of` (default: today) dates YTD paystub data; it only drives the
+        default paychecks remaining."""
+        ytd_input, ytd_errors = ytd_mod.parse_ytd(raw_inputs.get("ytd"))
+        if ytd_input is not None:
+            ytd_errors += ytd_mod.frequency_errors(raw_inputs)
+        facts = self._build_facts(raw_inputs, ytd_errors)
+        if ytd_input is not None:
+            as_of = as_of or date.today()
+            facts, ytd_salaries = ytd_mod.project_salaries(facts, ytd_input, as_of)
 
         fed = self._fed.compute(facts)
         fed_itemized = fed.itemized.total if fed.use_itemized else _ZERO
@@ -44,6 +56,28 @@ class ProjectionEngine:
         )
 
         fica = self._fica(facts)
+        liabilities = Liabilities(
+            federal_income_tax=fed.final_tax,
+            self_employment_tax=fed.se_tax.total,
+            state_income_tax=state_result.final_tax,
+            state_sdi=self._sdi(facts),
+            social_security=fica.social_security,
+            medicare=fica.total_medicare,
+        )
+
+        ytd = None
+        if ytd_input is not None:
+            # FICA is withheld exactly by payroll, so it is left out of refund/owe.
+            ytd = ytd_mod.settle(
+                ytd_input,
+                ytd_salaries,
+                federal_liability=liabilities.federal_income_tax
+                + liabilities.self_employment_tax,
+                state_liability=liabilities.state_income_tax,
+                sdi_liability=liabilities.state_sdi,
+                sdi_params=self._sdi_params(facts.state, facts.tax_year),
+                as_of=as_of,
+            )
 
         return ProjectionResult(
             tax_year=facts.tax_year,
@@ -51,21 +85,17 @@ class ProjectionEngine:
             state=facts.state,
             gross_income=fed.gross_income,
             wage_income=facts.total_w2_wages,
-            liabilities=Liabilities(
-                federal_income_tax=fed.final_tax,
-                self_employment_tax=fed.se_tax.total,
-                state_income_tax=state_result.final_tax,
-                state_sdi=self._sdi(facts),
-                social_security=fica.social_security,
-                medicare=fica.total_medicare,
-            ),
+            liabilities=liabilities,
             fica=fica,
+            ytd=ytd,
         )
 
-    def _build_facts(self, raw: Mapping[str, Any]) -> TaxFacts:
+    def _build_facts(
+        self, raw: Mapping[str, Any], extra_errors: list[FieldError] = ()
+    ) -> TaxFacts:
         # The withholding builder defaults state to CA; a projection
         # requires the user to choose it.
-        errors: list[FieldError] = []
+        errors: list[FieldError] = list(extra_errors)
         if raw.get("state") in (None, ""):
             errors.append(FieldError(field="state", code="missing", message="state is required"))
         try:

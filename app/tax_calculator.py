@@ -10,6 +10,7 @@ helpers, and exposes `TaxPipeline` plus a backwards-compatible
 from __future__ import annotations
 
 import os
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
@@ -48,9 +49,12 @@ class TaxPipeline:
     def compute_federal(self, facts: TaxFacts) -> FederalResult:
         return self._fed.compute(facts)
 
-    def project(self, raw_inputs: Mapping[str, Any]) -> ProjectionResult:
-        """Annual Tax Projection. Raises FactsError on invalid input."""
-        return self._projection.project(raw_inputs)
+    def project(
+        self, raw_inputs: Mapping[str, Any], *, as_of: date | None = None
+    ) -> ProjectionResult:
+        """Annual Tax Projection. Raises FactsError on invalid input.
+        `as_of` (default today) dates YTD paystub data."""
+        return self._projection.project(raw_inputs, as_of=as_of)
 
     def calculate_all(self, facts: TaxFacts | Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(facts, TaxFacts):

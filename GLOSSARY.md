@@ -34,6 +34,18 @@ The employee's share of payroll taxes on W-2 wages: Social Security (capped at t
 
 Cafeteria-plan pretax deductions: health insurance, dental, vision, FSA, HSA. They reduce income-tax wages and payroll-tax wages (FICA, CA SDI). See `PretaxDeductions.section_125`.
 
+## YTD Projection
+
+A mid-year projection from paystub figures (year-to-date gross, withholding, SDI, estimated payments). Dated by an **as-of date** (today by default). Salary is assumed constant: **projected wages** = YTD gross + paychecks remaining × (annual salary ÷ periods per year), and these replace the plain annual salary in the projection. A salary with no YTD figures keeps its annual salary and counts no withholding.
+
+## Paychecks Remaining
+
+Paydays in the tax year strictly after the as-of date (YTD figures are assumed to include a paycheck dated that day). Weekly/biweekly: whole 7/14-day steps to Dec 31. Semimonthly: the 15th and last day of each month. Monthly: last day of each month. A user-entered value overrides the default.
+
+## Projected Payments / Refund / Balance Due
+
+Per authority (federal, state, SDI): YTD withheld + paychecks remaining × current per-paycheck withholding + YTD estimated payments. SDI has no per-paycheck input, so remaining SDI = SDI rate × remaining wages, up to what is left of the wage base after YTD gross. Payments − liability is a **refund** when positive and a **balance due** when negative. The federal liability is income tax + self-employment tax; Employee FICA is excluded (payroll withholds it exactly). When a balance is due and paychecks remain, the **extra withholding** suggestion is balance ÷ paychecks remaining (W-4 Step 4(c) federal, DE 4 state), placed on the salary with the most paychecks remaining.
+
 ## Additional Medicare Tax
 
 An extra 0.9% Medicare tax on wages above a threshold set by filing status (single/HOH $200k, MFJ $250k). The projection applies it to combined household wages. Employers withhold it per employee once that employee's wages pass $200k, whatever the filing status, so paystubs can differ from the projection.

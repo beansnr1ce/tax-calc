@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from decimal import Decimal
 
+from .ytd import YtdProjection
+
 _ZERO = Decimal("0")
 
 
@@ -73,6 +75,8 @@ class ProjectionResult:
     wage_income: Decimal  # W-2 wages before pretax deductions
     liabilities: Liabilities
     fica: EmployeeFica = EmployeeFica()
+    # YTD / paystub projection (#22); None unless YTD data was supplied.
+    ytd: YtdProjection | None = None
 
     @property
     def total_liability(self) -> Decimal:

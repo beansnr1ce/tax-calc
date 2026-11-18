@@ -239,7 +239,7 @@
                     {{ frequency_select("salary1_frequency", "Salary 1 pay frequency") }}
                     {{ frequency_select("salary2_frequency", "Salary 2 pay frequency") }}
                 </div>
-                <div class="note">Needed only if you enter pretax deductions per paycheck.</div>
+                <div class="note">Needed if you enter pretax deductions per paycheck or year-to-date paystub figures.</div>
             </div>
         </details>
 
@@ -299,6 +299,42 @@
             </div>
         </details>
 
+        {% macro ytd_salary_fields(prefix) %}
+            <div class="form-row">
+                {{ money_input(prefix ~ "_gross", "YTD gross pay") }}
+                {{ money_input(prefix ~ "_federal_withheld", "YTD federal withheld") }}
+                {{ money_input(prefix ~ "_state_withheld", "YTD state withheld") }}
+                {{ money_input(prefix ~ "_sdi_withheld", "YTD SDI withheld") }}
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "_federal_per_paycheck", "Federal withholding per paycheck") }}
+                {{ money_input(prefix ~ "_state_per_paycheck", "State withholding per paycheck") }}
+                <div class="form-group">
+                    <label for="{{ prefix }}_paychecks_remaining">Paychecks remaining</label>
+                    <input type="number" id="{{ prefix }}_paychecks_remaining" name="{{ prefix }}_paychecks_remaining" min="0" step="1" placeholder="Auto">
+                    <div class="note">Blank = estimated from today's date and pay frequency.</div>
+                </div>
+            </div>
+        {% endmacro %}
+
+        <details class="refine ytd">
+            <summary>Year-to-date paystub (refund or balance due)</summary>
+            <div class="refine-body">
+                <div class="note">From your latest paystub. Requires pay frequency. Salary is assumed constant for the rest of the year.</div>
+                <h3>Salary 1</h3>
+                {{ ytd_salary_fields("ytd1") }}
+                <div id="ytd2Block" class="hidden">
+                    <h3>Salary 2</h3>
+                    {{ ytd_salary_fields("ytd2") }}
+                </div>
+                <h3>Estimated tax payments made this year</h3>
+                <div class="form-row">
+                    {{ money_input("ytd_federal_estimated_payments", "Federal (1040-ES)") }}
+                    {{ money_input("ytd_state_estimated_payments", "State") }}
+                </div>
+            </div>
+        </details>
+
         <button type="submit" id="submitBtn">Project My Taxes</button>
     </form>
 
@@ -325,6 +361,7 @@
         dualIncome.addEventListener('change', () => {
             document.getElementById('salary2Row').classList.toggle('hidden', !dualIncome.checked);
             document.getElementById('pretax2Block').classList.toggle('hidden', !dualIncome.checked);
+            document.getElementById('ytd2Block').classList.toggle('hidden', !dualIncome.checked);
         });
 
         const PRETAX_FIELDS = ['_401k', 'ira', 'hsa', 'fsa', 'health_insurance', 'dental', 'vision', 'other'];
@@ -390,7 +427,67 @@
                 payload.dual_income = true;
                 payload.salary2_annual = document.getElementById('salary2_annual').value;
             }
-            return addRefinements(payload);
+            return addYtd(addRefinements(payload));
+        }
+
+        // --- YTD / paystub projection ---------------------------------------
+        const YTD_SALARY_FIELDS = [
+            'gross', 'federal_withheld', 'state_withheld', 'sdi_withheld',
+            'federal_per_paycheck', 'state_per_paycheck', 'paychecks_remaining',
+        ];
+        const YTD_HOUSEHOLD_FIELDS = ['federal_estimated_payments', 'state_estimated_payments'];
+
+        function addYtd(payload) {
+            const ytd = {};
+            const s1 = collectGroup('ytd1_', YTD_SALARY_FIELDS);
+            if (s1) ytd.salary1 = s1;
+            if (payload.dual_income) {
+                const s2 = collectGroup('ytd2_', YTD_SALARY_FIELDS);
+                if (s2) ytd.salary2 = s2;
+            }
+            Object.assign(ytd, collectGroup('ytd_', YTD_HOUSEHOLD_FIELDS) || {});
+            if (Object.keys(ytd).length) payload.ytd = ytd;
+            return payload;
+        }
+
+        function ytdBalanceRow(label, b) {
+            const refund = Number(b.balance) >= 0;
+            return `<div class="row"><span>${label}: ${money(b.payments)} paid vs ${money(b.liability)} owed</span>`
+                + `<span>${refund ? 'Refund' : 'Balance due'} ${money(refund ? b.refund : b.balance_due)}</span></div>`;
+        }
+
+        function displayYtd(y) {
+            if (!y) return '';
+            const salaryLabel = { salary1: 'Salary 1', salary2: 'Salary 2' }[y.suggestion_salary] || '';
+            const suggestions = [];
+            if (y.federal_extra_per_paycheck) {
+                suggestions.push(`<div class="row"><span>Extra federal withholding (W-4 Step 4(c))</span>`
+                    + `<span>${money(y.federal_extra_per_paycheck)} per paycheck</span></div>`);
+            }
+            if (y.state_extra_per_paycheck) {
+                suggestions.push(`<div class="row"><span>Extra state withholding (DE 4)</span>`
+                    + `<span>${money(y.state_extra_per_paycheck)} per paycheck</span></div>`);
+            }
+            const salaries = [['Salary 1', y.salary1], ['Salary 2', y.salary2]]
+                .filter(([, s]) => s)
+                .map(([label, s]) => `<div class="row"><span>${label} projected wages (${s.paychecks_remaining} paychecks left)</span>`
+                    + `<span>${money(s.projected_wages)}</span></div>`)
+                .join('');
+            const hasSdi = Number(y.sdi.liability) !== 0 || Number(y.sdi.payments) !== 0;
+            return `
+                <div class="result-section ytd-result">
+                    <h2>Year-End Refund or Balance Due</h2>
+                    <div class="tax-summary">
+                        ${salaries}
+                        ${ytdBalanceRow('Federal', y.federal)}
+                        ${ytdBalanceRow('State', y.state)}
+                        ${hasSdi ? ytdBalanceRow('SDI', y.sdi) : ''}
+                    </div>
+                    ${suggestions.length ? `
+                    <h3>Suggested extra withholding on ${salaryLabel} (${y.suggestion_paychecks} paychecks left)</h3>
+                    <div class="tax-summary">${suggestions.join('')}</div>` : ''}
+                    <div class="note">Social Security and Medicare are withheld exactly by payroll and are not part of refund or balance due. Self-employment tax is included in the federal balance.</div>
+                </div>`;
         }
 
         function displayErrors(body) {
@@ -434,7 +531,7 @@
                     body: JSON.stringify(buildPayload()),
                 });
                 const body = await resp.json();
-                results.innerHTML = resp.ok ? displayResults(body) : displayErrors(body);
+                results.innerHTML = resp.ok ? displayResults(body) + displayYtd(body.ytd) : displayErrors(body);
             } catch (err) {
                 results.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
             } finally {

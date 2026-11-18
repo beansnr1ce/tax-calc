@@ -5,6 +5,7 @@ Expected values are hand-computed from the 2025/2026 tables with the
 arithmetic shown in comments.
 """
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -287,3 +288,224 @@ def test_other_1099_income_is_taxed_without_self_employment_tax(pipeline):
     assert result.liabilities.self_employment_tax == Decimal("0")
     # 65,000 taxable: 8,774 + 22%×2,000 = 9,214
     assert result.liabilities.federal_income_tax == Decimal("9214.00")
+
+
+# --- YTD / paystub projection (#22) -----------------------------------------
+
+AS_OF = date(2025, 11, 18)
+
+
+def _ytd(**overrides):
+    """Single, 2025, CA, 78,000/yr biweekly (3,000 per paycheck)."""
+    return _quick(salary1_frequency="biweekly", **overrides)
+
+
+def test_ytd_projected_wages_are_ytd_gross_plus_remaining_paychecks(pipeline):
+    result = pipeline.project(
+        _ytd(ytd={"salary1": {"gross": 61000, "paychecks_remaining": 6}}),
+        as_of=AS_OF,
+    )
+    # 61,000 + 6 × (78,000 ÷ 26 = 3,000) = 79,000 feeds the facts
+    assert result.ytd.salary1.projected_wages == Decimal("79000")
+    assert result.ytd.salary1.paychecks_remaining == 6
+    assert result.gross_income == Decimal("79000")
+    # FICA follows projected wages: 79,000 × 6.2% = 4,898
+    assert result.liabilities.social_security == Decimal("4898")
+
+
+def test_projection_without_ytd_data_has_no_ytd_section(pipeline):
+    assert pipeline.project(_quick()).ytd is None
+
+
+# Baseline for the cases below: 60,000 YTD gross (20 of 26 paychecks) + 6 × 3,000
+# = 78,000 projected wages, so liabilities match test_quick_projection_single_2025_ca:
+# federal 8,774; CA 3,137.182; SDI 936.
+def _paystub(federal_withheld, federal_per_paycheck, state_withheld, state_per_paycheck, **extra):
+    salary1 = {
+        "gross": 60000,
+        "federal_withheld": federal_withheld,
+        "federal_per_paycheck": federal_per_paycheck,
+        "state_withheld": state_withheld,
+        "state_per_paycheck": state_per_paycheck,
+        "sdi_withheld": 720,  # 60,000 × 1.2%
+        "paychecks_remaining": 6,
+    }
+    return _ytd(ytd={"salary1": salary1, **extra})
+
+
+def test_ytd_refund_for_federal_and_state(pipeline):
+    ytd = pipeline.project(_paystub(7000, 350, 2500, 120), as_of=AS_OF).ytd
+
+    # Federal: 7,000 + 6 × 350 = 9,100 paid vs 8,774 owed → 326 refund
+    assert ytd.federal.liability == Decimal("8774.00")
+    assert ytd.federal.payments == Decimal("9100")
+    assert ytd.federal.balance == Decimal("326")
+    assert ytd.federal.refund == Decimal("326")
+    assert ytd.federal.balance_due == Decimal("0")
+    # State: 2,500 + 6 × 120 = 3,220 paid vs 3,137.182 → 82.818 refund
+    assert ytd.state.payments == Decimal("3220")
+    assert ytd.state.refund == Decimal("82.818")
+    # No extra withholding is suggested when a refund is projected
+    assert ytd.federal_extra_per_paycheck is None
+    assert ytd.state_extra_per_paycheck is None
+    assert ytd.suggestion_salary is None
+
+
+def test_ytd_balance_due_suggests_extra_withholding_per_paycheck(pipeline):
+    ytd = pipeline.project(_paystub(6000, 300, 2200, 100), as_of=AS_OF).ytd
+
+    # Federal: 6,000 + 6 × 300 = 7,800 vs 8,774 → 974 due; 974 ÷ 6 per paycheck
+    assert ytd.federal.balance == Decimal("-974")
+    assert ytd.federal.balance_due == Decimal("974")
+    assert ytd.federal_extra_per_paycheck.quantize(Decimal("0.01")) == Decimal("162.33")
+    # State: 2,200 + 6 × 100 = 2,800 vs 3,137.182 → 337.182 due; ÷ 6 = 56.197
+    assert ytd.state.balance_due == Decimal("337.182")
+    assert ytd.state_extra_per_paycheck == Decimal("56.197")
+    assert ytd.suggestion_salary == "salary1"
+    assert ytd.suggestion_paychecks == 6
+
+
+def test_ytd_estimated_payments_count_toward_projected_payments(pipeline):
+    ytd = pipeline.project(
+        _paystub(
+            6000, 300, 2200, 100,
+            federal_estimated_payments=1000,
+            state_estimated_payments=400,
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Federal: 7,800 withheld + 1,000 estimated = 8,800 vs 8,774 → 26 refund
+    assert ytd.federal.payments == Decimal("8800")
+    assert ytd.federal.refund == Decimal("26")
+    # State: 2,800 + 400 = 3,200 vs 3,137.182 → 62.818 refund
+    assert ytd.state.refund == Decimal("62.818")
+
+
+def test_ytd_sdi_payments_project_rate_on_remaining_wages(pipeline):
+    ytd = pipeline.project(_paystub(7000, 350, 2500, 120), as_of=AS_OF).ytd
+    # 720 YTD + 1.2% × 18,000 remaining = 936 vs 936 liability
+    assert ytd.sdi.payments == Decimal("936")
+    assert ytd.sdi.balance == Decimal("0")
+
+
+def test_ytd_sdi_payments_stop_at_the_wage_base(pipeline):
+    ytd = pipeline.project(
+        _quick(
+            salary1_annual=260000,
+            salary1_frequency="biweekly",
+            ytd={"salary1": {"gross": 170000, "sdi_withheld": 2040, "paychecks_remaining": 6}},
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Remaining 6 × 10,000 = 60,000, but only 174,668 − 170,000 = 4,668 is under
+    # the base: 2,040 + 1.2% × 4,668 = 2,096.016 = 1.2% × 174,668 liability
+    assert ytd.sdi.payments == Decimal("2096.016")
+    assert ytd.sdi.balance == Decimal("0")
+
+
+def test_ytd_refund_or_owe_excludes_fica_but_includes_se_tax(pipeline):
+    result = pipeline.project(
+        _paystub(7000, 350, 2500, 120) | {"income_1099nec": 10000}, as_of=AS_OF
+    )
+    # SE: 10,000 × 0.9235 = 9,235 × 15.3% = 1,412.955; half = 706.4775
+    # Taxable: 88,000 − 706.4775 − 15,000 = 72,293.5225
+    # Income tax: 8,774 + 22% × 9,293.5225 = 10,818.57495
+    # Federal liability: 10,818.57495 + 1,412.955 = 12,231.52995 (no SS/Medicare)
+    assert result.ytd.federal.liability == Decimal("12231.52995")
+    assert result.ytd.federal.balance == Decimal("-3131.52995")  # 9,100 paid
+    assert result.liabilities.social_security > 0  # FICA is still a liability line
+
+
+def test_ytd_zero_paychecks_remaining_balance_due_has_no_suggestion(pipeline):
+    ytd = pipeline.project(
+        _ytd(
+            ytd={"salary1": {"gross": 78000, "federal_withheld": 7000, "paychecks_remaining": 0}}
+        ),
+        as_of=AS_OF,
+    ).ytd
+    assert ytd.salary1.projected_wages == Decimal("78000")
+    assert ytd.federal.balance_due == Decimal("1774")  # 8,774 − 7,000
+    assert ytd.federal_extra_per_paycheck is None
+    assert ytd.state_extra_per_paycheck is None
+    assert ytd.suggestion_salary is None
+
+
+@pytest.mark.parametrize(
+    "frequency, expected",
+    [
+        # As of 2025-11-18: 43 days left in the year
+        ("weekly", 6),  # 43 // 7
+        ("biweekly", 3),  # 43 // 14
+        ("semimonthly", 3),  # Nov 30, Dec 15, Dec 31
+        ("monthly", 2),  # Nov 30, Dec 31
+    ],
+)
+def test_ytd_default_paychecks_remaining_by_frequency(pipeline, frequency, expected):
+    result = pipeline.project(
+        _quick(salary1_frequency=frequency, ytd={"salary1": {"gross": 60000}}),
+        as_of=AS_OF,
+    )
+    assert result.ytd.salary1.paychecks_remaining == expected
+
+
+def test_ytd_paychecks_remaining_default_outside_the_tax_year(pipeline):
+    before = pipeline.project(_ytd(ytd={"salary1": {"gross": 0}}), as_of=date(2024, 12, 20))
+    after = pipeline.project(_ytd(ytd={"salary1": {"gross": 60000}}), as_of=date(2026, 1, 5))
+    assert before.ytd.salary1.paychecks_remaining == 26
+    assert after.ytd.salary1.paychecks_remaining == 0
+
+
+def test_ytd_paychecks_remaining_override_wins(pipeline):
+    result = pipeline.project(
+        _ytd(ytd={"salary1": {"gross": 60000, "paychecks_remaining": 5}}), as_of=AS_OF
+    )
+    assert result.ytd.salary1.paychecks_remaining == 5
+    assert result.ytd.salary1.projected_wages == Decimal("75000")  # 60,000 + 5 × 3,000
+
+
+def test_ytd_without_pay_frequency_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_quick(ytd={"salary1": {"gross": 60000}}), as_of=AS_OF)
+    assert any(
+        e.field == "salary1_frequency" and e.code == "frequency_required"
+        for e in exc.value.errors
+    )
+
+
+def test_ytd_estimated_payments_alone_also_require_frequency(pipeline):
+    with pytest.raises(FactsError):
+        pipeline.project(_quick(ytd={"federal_estimated_payments": 500}), as_of=AS_OF)
+
+
+def test_ytd_negative_amount_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_ytd(ytd={"salary1": {"gross": -1}}), as_of=AS_OF)
+    assert any(e.field == "ytd.salary1.gross" and e.code == "range" for e in exc.value.errors)
+
+
+def test_blank_ytd_fields_mean_no_ytd_projection(pipeline):
+    result = pipeline.project(
+        _quick(ytd={"salary1": {"gross": ""}, "federal_estimated_payments": ""})
+    )
+    assert result.ytd is None
+
+
+def test_dual_income_ytd_suggests_on_salary_with_most_paychecks_left(pipeline):
+    result = pipeline.project(
+        _ytd(
+            dual_income=True,
+            salary2_annual=24000,
+            salary2_frequency="monthly",
+            ytd={
+                "salary1": {"gross": 60000, "paychecks_remaining": 6},
+                "salary2": {"gross": 22000, "paychecks_remaining": 1},
+            },
+        ),
+        as_of=AS_OF,
+    )
+    ytd = result.ytd
+    assert ytd.salary2.projected_wages == Decimal("24000")  # 22,000 + 1 × 2,000
+    assert result.wage_income == Decimal("102000")  # 78,000 + 24,000
+    # Nothing withheld → balance due; the suggestion goes on salary1 (6 paychecks)
+    assert ytd.suggestion_salary == "salary1"
+    assert ytd.suggestion_paychecks == 6

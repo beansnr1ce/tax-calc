@@ -11,6 +11,7 @@ from flask import Flask, render_template, request, jsonify
 from .state_tax import NO_TAX_STATES, StateEngineRegistry
 from .state_tax.states import register_overrides
 from .projection import ProjectionResult
+from .projection.ytd import AuthorityBalance, SalaryYtd, YtdProjection
 from .tax_calculator import TaxPipeline
 from .tax_facts import FactsError, build_facts
 from .tax_registry import FilesystemSource, TaxTableRegistry
@@ -69,6 +70,47 @@ def _serialize_projection(result: ProjectionResult) -> dict:
         "fica": {f.name: _money(getattr(result.fica, f.name)) for f in fields(result.fica)},
         "total_liability": _money(result.total_liability),
         "effective_rate": _rate(result.effective_rate),
+        "ytd": _serialize_ytd(result.ytd),
+    }
+
+
+def _serialize_ytd(ytd: YtdProjection | None) -> dict | None:
+    """YTD / paystub section (#22); null when no YTD data was supplied."""
+    if ytd is None:
+        return None
+
+    def salary(s: SalaryYtd | None) -> dict | None:
+        if s is None:
+            return None
+        return {
+            "paychecks_remaining": s.paychecks_remaining,
+            **{f.name: _money(getattr(s, f.name)) for f in fields(s)
+               if f.name != "paychecks_remaining"},
+        }
+
+    def balance(b: AuthorityBalance) -> dict:
+        return {
+            "liability": _money(b.liability),
+            "payments": _money(b.payments),
+            "balance": _money(b.balance),
+            "refund": _money(b.refund),
+            "balance_due": _money(b.balance_due),
+        }
+
+    def maybe(v: Decimal | None) -> str | None:
+        return None if v is None else _money(v)
+
+    return {
+        "as_of": ytd.as_of.isoformat(),
+        "salary1": salary(ytd.salary1),
+        "salary2": salary(ytd.salary2),
+        "federal": balance(ytd.federal),
+        "state": balance(ytd.state),
+        "sdi": balance(ytd.sdi),
+        "suggestion_salary": ytd.suggestion_salary,
+        "suggestion_paychecks": ytd.suggestion_paychecks,
+        "federal_extra_per_paycheck": maybe(ytd.federal_extra_per_paycheck),
+        "state_extra_per_paycheck": maybe(ytd.state_extra_per_paycheck),
     }
 
 

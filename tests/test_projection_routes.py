@@ -124,3 +124,71 @@ def test_projection_page_explains_additional_medicare_withholding(client):
     html = client.get("/projection").get_data(as_text=True)
     assert "Additional Medicare" in html
     assert "$200,000 per employer" in html
+
+
+# --- YTD / paystub projection (#22) -----------------------------------------
+
+
+def test_ytd_without_pay_frequency_returns_400(client):
+    resp = client.post("/project", json=_payload(ytd={"salary1": {"gross": 60000}}))
+    assert resp.status_code == 400
+    assert any(
+        f["field"] == "salary1_frequency" and f["code"] == "frequency_required"
+        for f in resp.get_json()["fields"]
+    )
+
+
+def test_project_response_includes_ytd_section(client):
+    body = client.post(
+        "/project",
+        json=_payload(
+            salary1_frequency="biweekly",
+            ytd={
+                "salary1": {
+                    "gross": 60000,
+                    "federal_withheld": 6000,
+                    "federal_per_paycheck": 300,
+                    "paychecks_remaining": 6,
+                }
+            },
+        ),
+    ).get_json()
+    ytd = body["ytd"]
+    assert ytd["salary1"]["paychecks_remaining"] == 6
+    assert ytd["salary1"]["projected_wages"] == "78000.00"
+    # 6,000 + 6 × 300 = 7,800 vs 8,774 → 974 due, 162.33 extra per paycheck
+    assert ytd["federal"] == {
+        "liability": "8774.00",
+        "payments": "7800.00",
+        "balance": "-974.00",
+        "refund": "0.00",
+        "balance_due": "974.00",
+    }
+    assert ytd["federal_extra_per_paycheck"] == "162.33"
+    assert ytd["suggestion_salary"] == "salary1"
+    assert ytd["salary2"] is None
+
+
+def test_project_response_ytd_is_null_without_ytd_data(client):
+    assert client.post("/project", json=_payload()).get_json()["ytd"] is None
+
+
+def test_projection_page_has_collapsed_ytd_panel(client):
+    html = client.get("/projection").get_data(as_text=True)
+    assert '<details class="refine ytd"' in html
+    assert '<details class="refine ytd" open' not in html
+    for name in (
+        "ytd1_gross",
+        "ytd1_federal_withheld",
+        "ytd1_state_withheld",
+        "ytd1_sdi_withheld",
+        "ytd1_federal_per_paycheck",
+        "ytd1_state_per_paycheck",
+        "ytd1_paychecks_remaining",
+        "ytd2_gross",
+        "ytd_federal_estimated_payments",
+        "ytd_state_estimated_payments",
+    ):
+        assert f'name="{name}"' in html, name
+    assert "W-4 Step 4(c)" in html
+    assert "DE 4" in html
