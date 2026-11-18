@@ -3,13 +3,15 @@ Flask application for the Tax Withholding Calculator.
 """
 
 import os
+from dataclasses import fields
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify
 from .state_tax import NO_TAX_STATES, StateEngineRegistry
 from .state_tax.states import register_overrides
-from .projection import ProjectionResult
+from .projection import EmployeeFica, ProjectionResult, SalaryFica
+from .projection.ytd import AuthorityBalance, SalaryYtd, YtdProjection
 from .tax_calculator import TaxPipeline
 from .tax_facts import FactsError, build_facts
 from .tax_registry import FilesystemSource, TaxTableRegistry
@@ -65,8 +67,82 @@ def _serialize_projection(result: ProjectionResult) -> dict:
         "gross_income": _money(result.gross_income),
         "wage_income": _money(result.wage_income),
         "liabilities": {name: _money(v) for name, v in result.liabilities.items()},
+        "fica": _serialize_fica(result.fica),
         "total_liability": _money(result.total_liability),
         "effective_rate": _rate(result.effective_rate),
+        **_serialize_take_home(result),
+        "ytd": _serialize_ytd(result.ytd),
+    }
+
+
+def _optional_money(value: Decimal | None) -> str | None:
+    return None if value is None else _money(value)
+
+
+def _serialize_fica(fica: EmployeeFica) -> dict:
+    def salary(s: SalaryFica | None) -> dict | None:
+        if s is None:
+            return None
+        return {"fica_wages": _money(s.fica_wages), "social_security": _money(s.social_security)}
+
+    return {
+        "salary1": salary(fica.salary1),
+        "salary2": salary(fica.salary2),
+        "medicare": _money(fica.medicare),
+        "additional_medicare": _money(fica.additional_medicare),
+    }
+
+
+def _serialize_take_home(result: ProjectionResult) -> dict:
+    """Marginal rates and take-home pay (#21)."""
+    take_home = result.take_home
+    return {
+        "marginal_rates": {
+            "federal": _rate(result.marginal_rates.federal),
+            "state": _rate(result.marginal_rates.state),
+        },
+        "take_home": {
+            "annual": _money(take_home.annual),
+            "periods_per_year": take_home.periods_per_year,
+            "per_paycheck": _optional_money(take_home.per_paycheck),
+        },
+    }
+
+
+def _serialize_ytd(ytd: YtdProjection | None) -> dict | None:
+    """YTD / paystub section (#22); null when no YTD data was supplied."""
+    if ytd is None:
+        return None
+
+    def salary(s: SalaryYtd | None) -> dict | None:
+        if s is None:
+            return None
+        return {
+            "paychecks_remaining": s.paychecks_remaining,
+            **{f.name: _money(getattr(s, f.name)) for f in fields(s)
+               if f.name != "paychecks_remaining"},
+        }
+
+    def balance(b: AuthorityBalance) -> dict:
+        return {
+            "liability": _money(b.liability),
+            "payments": _money(b.payments),
+            "refund_or_balance_due": _money(b.refund_or_balance_due),
+            "refund": _money(b.refund),
+            "balance_due": _money(b.balance_due),
+        }
+
+    return {
+        "as_of": ytd.as_of.isoformat(),
+        "salary1": salary(ytd.salary1),
+        "salary2": salary(ytd.salary2),
+        "federal": balance(ytd.federal),
+        "state": balance(ytd.state),
+        "sdi": balance(ytd.sdi),
+        "suggestion_salary": ytd.suggestion_salary,
+        "suggestion_paychecks": ytd.suggestion_paychecks,
+        "federal_extra_per_paycheck": _optional_money(ytd.federal_extra_per_paycheck),
+        "state_extra_per_paycheck": _optional_money(ytd.state_extra_per_paycheck),
     }
 
 

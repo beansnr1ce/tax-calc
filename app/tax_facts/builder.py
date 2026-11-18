@@ -8,6 +8,7 @@ from app.state_tax import NO_TAX_STATES
 from app.tax_registry import TaxTableRegistry
 
 from .errors import FactsError, FieldError
+from .parsing import is_missing, parse_decimal
 from .facts import (
     ItemizedDeductions,
     PretaxDeductions,
@@ -48,25 +49,25 @@ def build_facts(
     tax_year = _required_int(payload, "tax_year", errors)
     filing_status = _required_str(payload, "filing_status", errors)
     state = payload.get("state") or "CA"
-    salary1_by_annual = not _is_missing(payload.get("salary1_annual"))
-    if salary1_by_annual:
-        salary1_amount = _required_decimal(payload, "salary1_annual", errors, non_negative=True)
-    elif _is_missing(payload.get("salary1_gross")):
-        salary1_amount = None
-        errors.append(
-            FieldError(
-                field="salary1_gross",
-                code="missing",
-                message="salary1_gross (per paycheck) or salary1_annual is required",
-            )
+    salary1 = _build_salary(
+        payload,
+        "salary1",
+        "pretax_deductions_1",
+        errors,
+        require_frequency=require_frequency,
+    )
+    if payload.get("dual_income", False):
+        salary2 = _build_salary(
+            payload,
+            "salary2",
+            "pretax_deductions_2",
+            errors,
+            require_frequency=require_frequency,
+            default_freq="biweekly",
+            allow_zero=False,
         )
     else:
-        salary1_amount = _required_decimal(payload, "salary1_gross", errors, non_negative=True)
-    if require_frequency or not salary1_by_annual:
-        salary1_frequency = _required_str(payload, "salary1_frequency", errors)
-    else:
-        raw_freq = payload.get("salary1_frequency")
-        salary1_frequency = None if _is_missing(raw_freq) else str(raw_freq)
+        salary2 = None
 
     if filing_status is not None and filing_status not in _VALID_FILING_STATUSES:
         errors.append(
@@ -75,16 +76,6 @@ def build_facts(
                 code="unknown_filing_status",
                 message=f"unknown filing status {filing_status!r}",
                 detail={"valid": sorted(_VALID_FILING_STATUSES)},
-            )
-        )
-
-    if salary1_frequency is not None and salary1_frequency not in PAY_FREQUENCIES:
-        errors.append(
-            FieldError(
-                field="salary1_frequency",
-                code="unknown_frequency",
-                message=f"unknown frequency {salary1_frequency!r}",
-                detail={"valid": sorted(PAY_FREQUENCIES.keys())},
             )
         )
 
@@ -111,38 +102,8 @@ def build_facts(
             )
         )
 
-    dual_income = bool(payload.get("dual_income", False))
-    salary2 = None
-    if dual_income:
-        salary2 = _build_salary(
-            payload,
-            "salary2",
-            errors,
-            default_freq="biweekly",
-            require_frequency=require_frequency,
-        )
-
     if errors:
         raise FactsError(errors)
-
-    salary1_periods = PAY_FREQUENCIES[salary1_frequency] if salary1_frequency else None
-    salary1_pretax = _build_pretax(payload, "pretax_deductions_1", salary1_periods, errors)
-
-    if salary2 is not None:
-        salary2_pretax = _build_pretax(
-            payload, "pretax_deductions_2", salary2.periods_per_year, errors
-        )
-        salary2 = SalaryFacts(
-            gross_per_period=salary2.gross_per_period,
-            frequency=salary2.frequency,
-            periods_per_year=salary2.periods_per_year,
-            annual=salary2.annual,
-            pretax=salary2_pretax,
-        )
-
-    salary1 = _salary_facts(
-        salary1_amount, salary1_by_annual, salary1_frequency, salary1_pretax
-    )
 
     itemized = _build_itemized(payload, errors)
 
@@ -171,15 +132,31 @@ def build_facts(
 def _build_salary(
     payload: Mapping[str, Any],
     prefix: str,
+    pretax_key: str,
     errors: list[FieldError],
     *,
-    default_freq: str,
-    require_frequency: bool = True,
+    require_frequency: bool,
+    default_freq: str | None = None,
+    allow_zero: bool = True,
 ) -> SalaryFacts | None:
-    by_annual = not _is_missing(payload.get(f"{prefix}_annual"))
+    """A salary given per period (`<prefix>_gross` + frequency) or annually
+    (`<prefix>_annual`). The frequency may be omitted for an annual salary
+    unless `require_frequency`; otherwise a missing one falls back to
+    `default_freq`, or is an error when there is none."""
+    by_annual = not is_missing(payload.get(f"{prefix}_annual"))
     amount_field = f"{prefix}_annual" if by_annual else f"{prefix}_gross"
-    amount = _required_decimal(payload, amount_field, errors, non_negative=True)
-    if amount is not None and amount == 0:
+    if is_missing(payload.get(amount_field)):
+        errors.append(
+            FieldError(
+                field=amount_field,
+                code="missing",
+                message=f"{prefix}_gross (per paycheck) or {prefix}_annual is required",
+            )
+        )
+        amount = None
+    else:
+        amount = _required_decimal(payload, amount_field, errors, non_negative=True)
+    if amount is not None and amount == 0 and not allow_zero:
         errors.append(
             FieldError(
                 field=amount_field,
@@ -188,15 +165,24 @@ def _build_salary(
             )
         )
         return None
-    if by_annual and not require_frequency:
-        freq = payload.get(f"{prefix}_frequency")
-        freq = None if _is_missing(freq) else freq
-    else:
-        freq = payload.get(f"{prefix}_frequency", default_freq)
+
+    freq_field = f"{prefix}_frequency"
+    freq = payload.get(freq_field)
+    if is_missing(freq):
+        if by_annual and not require_frequency:
+            freq = None
+        elif default_freq is not None:
+            freq = default_freq
+        else:
+            errors.append(
+                FieldError(field=freq_field, code="missing", message=f"{freq_field} is required")
+            )
+            return None
+    freq = None if freq is None else str(freq)
     if freq is not None and freq not in PAY_FREQUENCIES:
         errors.append(
             FieldError(
-                field=f"{prefix}_frequency",
+                field=freq_field,
                 code="unknown_frequency",
                 message=f"unknown frequency {freq!r}",
                 detail={"valid": sorted(PAY_FREQUENCIES.keys())},
@@ -205,28 +191,13 @@ def _build_salary(
         return None
     if amount is None:
         return None
-    return _salary_facts(amount, by_annual, freq, PretaxDeductions())
-
-
-def _salary_facts(
-    amount: Decimal,
-    by_annual: bool,
-    frequency: str | None,
-    pretax: PretaxDeductions,
-) -> SalaryFacts:
-    periods = PAY_FREQUENCIES[frequency] if frequency else None
-    if by_annual:
-        annual = amount
-        per_period = amount / periods if periods else None
-    else:
-        annual = amount * periods
-        per_period = amount
+    periods = PAY_FREQUENCIES[freq] if freq else None
     return SalaryFacts(
-        gross_per_period=per_period,
-        frequency=frequency,
+        gross_per_period=amount if not by_annual else (amount / periods if periods else None),
+        frequency=freq,
         periods_per_year=periods,
-        annual=annual,
-        pretax=pretax,
+        annual=amount if by_annual else amount * periods,
+        pretax=_build_pretax(payload, pretax_key, periods, errors),
     )
 
 
@@ -339,13 +310,9 @@ def _enforce_caps(
     _check("pretax_deductions.hsa", pretax1.hsa + p2.hsa, "hsa_family")
 
 
-def _is_missing(value: Any) -> bool:
-    return value is None or value == ""
-
-
 def _required_str(payload: Mapping[str, Any], field: str, errors: list[FieldError]) -> str | None:
     value = payload.get(field)
-    if _is_missing(value):
+    if is_missing(value):
         errors.append(FieldError(field=field, code="missing", message=f"{field} is required"))
         return None
     return str(value)
@@ -353,7 +320,7 @@ def _required_str(payload: Mapping[str, Any], field: str, errors: list[FieldErro
 
 def _required_int(payload: Mapping[str, Any], field: str, errors: list[FieldError]) -> int | None:
     value = payload.get(field)
-    if _is_missing(value):
+    if is_missing(value):
         errors.append(FieldError(field=field, code="missing", message=f"{field} is required"))
         return None
     try:
@@ -371,23 +338,10 @@ def _required_decimal(
     non_negative: bool = False,
 ) -> Decimal | None:
     value = payload.get(field)
-    if _is_missing(value):
+    if is_missing(value):
         errors.append(FieldError(field=field, code="missing", message=f"{field} is required"))
         return None
-    try:
-        result = Decimal(str(value))
-    except Exception:
-        errors.append(FieldError(field=field, code="type", message=f"{field} must be numeric"))
-        return None
-    if non_negative and result < 0:
-        errors.append(
-            FieldError(
-                field=field, code="range", message=f"{field} must be non-negative",
-                detail={"value": str(result)},
-            )
-        )
-        return None
-    return result
+    return parse_decimal(value, field, errors, non_negative=non_negative)
 
 
 def _optional_decimal(payload: Mapping[str, Any], field: str) -> Decimal:

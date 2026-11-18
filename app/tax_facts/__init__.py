@@ -6,6 +6,7 @@ from .facts import (
     TaxFacts,
 )
 from .builder import build_facts
+from .parsing import is_missing, parse_decimal, parse_whole_number
 
 __all__ = [
     "FactsError",
@@ -15,4 +16,7 @@ __all__ = [
     "SalaryFacts",
     "TaxFacts",
     "build_facts",
+    "is_missing",
+    "parse_decimal",
+    "parse_whole_number",
 ]

@@ -832,7 +832,7 @@
                         <h3>California SDI</h3>
                         <table class="bracket-table">
                             <tr><td>SDI Rate</td><td>${result.california.sdi.rate}%</td></tr>
-                            <tr><td>Taxable Wages (up to $${result.california.sdi.wage_base.toLocaleString()})</td><td>${formatCurrency(result.california.sdi.taxable_wages)}</td></tr>
+                            <tr><td>Taxable Wages${result.california.sdi.wage_base == null ? ' (no wage ceiling)' : ` (up to $${result.california.sdi.wage_base.toLocaleString()})`}</td><td>${formatCurrency(result.california.sdi.taxable_wages)}</td></tr>
                             <tr><td><strong>SDI Tax</strong></td><td><strong>${formatCurrency(result.california.sdi.tax)}</strong></td></tr>
                         </table>
 

@@ -1,4 +1,4 @@
 from .engine import ProjectionEngine
-from .result import Liabilities, ProjectionResult
+from .result import EmployeeFica, Liabilities, MarginalRates, ProjectionResult, SalaryFica, TakeHome
 
-__all__ = ["Liabilities", "ProjectionEngine", "ProjectionResult"]
+__all__ = ["EmployeeFica", "Liabilities", "MarginalRates", "ProjectionEngine", "ProjectionResult", "SalaryFica", "TakeHome"]

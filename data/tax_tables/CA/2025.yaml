@@ -47,6 +47,6 @@ extras:
   dependent_exemption_credit: "446"
   sdi:
     rate: "0.012"
-    wage_base: "174668"
+    # No wage_base: SDI has no wage ceiling since 2024 (SB 951).
   mental_health_threshold: "1000000"
   mental_health_rate: "0.01"

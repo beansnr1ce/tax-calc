@@ -90,6 +90,7 @@
             border-bottom: 1px solid #eee;
         }
         .tax-summary .row:last-child { border-bottom: none; }
+        .info-tip { cursor: help; color: #667eea; }
         .tax-summary .row.total {
             font-weight: bold;
             font-size: 1.2em;
@@ -105,6 +106,21 @@
             margin-bottom: 15px;
         }
         .error ul { margin: 5px 0 0 0; padding-left: 20px; }
+        details.refine {
+            background: white;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        details.refine > summary {
+            cursor: pointer;
+            padding: 15px 20px;
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        details.refine > .refine-body { padding: 0 20px 5px; }
+        details.refine h3 { font-size: 1em; margin: 5px 0 10px; }
+        .refine-heading { color: #666; font-size: 0.9em; margin: 0 0 10px; }
         @media (max-width: 600px) { .form-group { min-width: 100%; } }
     </style>
 </head>
@@ -165,6 +181,160 @@
             </div>
         </div>
 
+        {% macro money_input(name, label, note=None) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <input type="number" id="{{ name }}" name="{{ name }}" min="0" step="0.01" placeholder="0">
+                    {% if note %}<div class="note">{{ note }}</div>{% endif %}
+                </div>
+        {% endmacro %}
+        {% macro count_input(name, label) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <input type="number" id="{{ name }}" name="{{ name }}" min="0" step="1" placeholder="0">
+                </div>
+        {% endmacro %}
+        {% macro frequency_select(name, label) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <select id="{{ name }}" name="{{ name }}">
+                        <option value="">Not specified</option>
+                        <option value="weekly">Weekly (52)</option>
+                        <option value="biweekly">Biweekly (26)</option>
+                        <option value="semimonthly">Semi-monthly (24)</option>
+                        <option value="monthly">Monthly (12)</option>
+                    </select>
+                </div>
+        {% endmacro %}
+        {% macro pretax_fields(prefix) %}
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="{{ prefix }}_input_type">Amounts entered</label>
+                    <select id="{{ prefix }}_input_type" name="{{ prefix }}_input_type">
+                        <option value="annual">Per year</option>
+                        <option value="per_period" disabled hidden>Per paycheck (requires pay frequency)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "__401k", "401(k)") }}
+                {{ money_input(prefix ~ "_ira", "IRA") }}
+                {{ money_input(prefix ~ "_hsa", "HSA") }}
+                {{ money_input(prefix ~ "_fsa", "FSA") }}
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "_health_insurance", "Health insurance") }}
+                {{ money_input(prefix ~ "_dental", "Dental") }}
+                {{ money_input(prefix ~ "_vision", "Vision") }}
+                {{ money_input(prefix ~ "_other", "Other") }}
+            </div>
+        {% endmacro %}
+
+        <p class="refine-heading">Optional: refine your projection.</p>
+
+        <details class="refine">
+            <summary>Pay frequency</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ frequency_select("salary1_frequency", "Salary 1 pay frequency") }}
+                    {{ frequency_select("salary2_frequency", "Salary 2 pay frequency") }}
+                </div>
+                <div class="note">Needed if you enter pretax deductions per paycheck or year-to-date paystub figures.</div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Pretax deductions</summary>
+            <div class="refine-body">
+                <h3>Salary 1</h3>
+                {{ pretax_fields("pretax1") }}
+                <div id="pretax2Block" class="hidden">
+                    <h3>Salary 2</h3>
+                    {{ pretax_fields("pretax2") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Other income (1099s)</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ money_input("income_1099nec", "1099-NEC / MISC", "Self-employment income; adds self-employment tax.") }}
+                    {{ money_input("income_1099g", "1099-G") }}
+                </div>
+                <div class="form-row">
+                    {{ money_input("income_1099int_div", "1099-INT / DIV") }}
+                    {{ money_input("other_income", "Other income") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Dependents</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ count_input("children_under_17", "Children under 17") }}
+                    {{ count_input("other_dependents", "Other dependents") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Deductions</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ money_input("student_loan_interest", "Student loan interest") }}
+                </div>
+                <h3>Itemized deductions</h3>
+                <div class="form-row">
+                    {{ money_input("itemized_charitable", "Charitable") }}
+                    {{ money_input("itemized_mortgage_interest", "Mortgage interest") }}
+                    {{ money_input("itemized_salt", "State & local taxes (SALT)") }}
+                </div>
+                <div class="form-row">
+                    {{ money_input("itemized_medical", "Medical") }}
+                    {{ money_input("itemized_other", "Other") }}
+                </div>
+                <div class="note">Standard vs. itemized is chosen automatically, whichever is larger.</div>
+            </div>
+        </details>
+
+        {% macro ytd_salary_fields(prefix) %}
+            <div class="form-row">
+                {{ money_input(prefix ~ "_gross", "YTD gross pay") }}
+                {{ money_input(prefix ~ "_federal_withheld", "YTD federal withheld") }}
+                {{ money_input(prefix ~ "_state_withheld", "YTD state withheld") }}
+                {{ money_input(prefix ~ "_sdi_withheld", "YTD SDI withheld") }}
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "_federal_per_paycheck", "Federal withholding per paycheck") }}
+                {{ money_input(prefix ~ "_state_per_paycheck", "State withholding per paycheck") }}
+                <div class="form-group">
+                    <label for="{{ prefix }}_paychecks_remaining">Paychecks remaining</label>
+                    <input type="number" id="{{ prefix }}_paychecks_remaining" name="{{ prefix }}_paychecks_remaining" min="0" step="1" placeholder="Auto">
+                    <div class="note">Blank = estimated from today's date and pay frequency.</div>
+                </div>
+            </div>
+        {% endmacro %}
+
+        <details class="refine ytd">
+            <summary>Year-to-date paystub (refund or balance due)</summary>
+            <div class="refine-body">
+                <div class="note">From your latest paystub. Requires pay frequency and YTD gross for each salary. Salary is assumed constant for the rest of the year.</div>
+                <h3>Salary 1</h3>
+                {{ ytd_salary_fields("ytd1") }}
+                <div id="ytd2Block" class="hidden">
+                    <h3>Salary 2</h3>
+                    {{ ytd_salary_fields("ytd2") }}
+                </div>
+                <h3>Estimated tax payments made this year</h3>
+                <div class="form-row">
+                    {{ money_input("ytd_federal_estimated_payments", "Federal (1040-ES)") }}
+                    {{ money_input("ytd_state_estimated_payments", "State") }}
+                </div>
+            </div>
+        </details>
+
         <button type="submit" id="submitBtn">Project My Taxes</button>
     </form>
 
@@ -180,10 +350,76 @@
             medicare: 'Medicare (incl. Additional Medicare)',
         };
 
+        const LIABILITY_TIPS = {
+            medicare: 'Additional Medicare (0.9%) is projected on combined household wages above your '
+                + 'filing-status threshold ($250,000 married filing jointly, $200,000 single/head of household). '
+                + 'Employers withhold it once your wages pass $200,000 per employer, regardless of filing status, '
+                + 'so your paystubs may differ from this projection.',
+        };
+
         const dualIncome = document.getElementById('dual_income');
         dualIncome.addEventListener('change', () => {
             document.getElementById('salary2Row').classList.toggle('hidden', !dualIncome.checked);
+            document.getElementById('pretax2Block').classList.toggle('hidden', !dualIncome.checked);
+            document.getElementById('ytd2Block').classList.toggle('hidden', !dualIncome.checked);
         });
+
+        // "Per paycheck" pretax amounts need that salary's pay frequency.
+        function syncPerPaycheckOption(n) {
+            const hasFrequency = fieldValue(`salary${n}_frequency`) !== null;
+            const select = document.getElementById(`pretax${n}_input_type`);
+            const option = select.querySelector('option[value="per_period"]');
+            option.disabled = !hasFrequency;
+            option.hidden = !hasFrequency;
+            if (!hasFrequency && select.value === 'per_period') select.value = 'annual';
+        }
+        for (const n of [1, 2]) {
+            document.getElementById(`salary${n}_frequency`)
+                .addEventListener('change', () => syncPerPaycheckOption(n));
+            syncPerPaycheckOption(n);  // browsers may restore a selection on reload
+        }
+
+        const PRETAX_FIELDS = ['_401k', 'ira', 'hsa', 'fsa', 'health_insurance', 'dental', 'vision', 'other'];
+        const ITEMIZED_FIELDS = ['charitable', 'mortgage_interest', 'salt', 'medical', 'other'];
+        const OPTIONAL_AMOUNTS = [
+            'income_1099g', 'income_1099nec', 'income_1099int_div', 'other_income',
+            'student_loan_interest', 'children_under_17', 'other_dependents',
+        ];
+
+        function fieldValue(id) {
+            const el = document.getElementById(id);
+            return el && el.value !== '' ? el.value : null;
+        }
+
+        // Collects `<prefix><field>` inputs into an object; null when all are blank.
+        function collectGroup(prefix, fields) {
+            const group = {};
+            for (const f of fields) {
+                const v = fieldValue(prefix + f);
+                if (v !== null) group[f] = v;
+            }
+            return Object.keys(group).length ? group : null;
+        }
+
+        function addRefinements(payload) {
+            const freq1 = fieldValue('salary1_frequency');
+            if (freq1) payload.salary1_frequency = freq1;
+            for (const key of OPTIONAL_AMOUNTS) {
+                const v = fieldValue(key);
+                if (v !== null) payload[key] = v;
+            }
+            const pretax1 = collectGroup('pretax1_', PRETAX_FIELDS);
+            if (pretax1) payload.pretax_deductions_1 = { input_type: fieldValue('pretax1_input_type'), ...pretax1 };
+            if (payload.dual_income) {
+                const freq2 = fieldValue('salary2_frequency');
+                if (freq2) payload.salary2_frequency = freq2;
+                const pretax2 = collectGroup('pretax2_', PRETAX_FIELDS);
+                if (pretax2) payload.pretax_deductions_2 = { input_type: fieldValue('pretax2_input_type'), ...pretax2 };
+            }
+            const itemized = collectGroup('itemized_', ITEMIZED_FIELDS);
+            if (itemized) payload.itemized_deductions = itemized;
+            return payload;
+        }
 
         function money(s) {
             return Number(s).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -206,7 +442,67 @@
                 payload.dual_income = true;
                 payload.salary2_annual = document.getElementById('salary2_annual').value;
             }
+            return addYtd(addRefinements(payload));
+        }
+
+        // --- YTD / paystub projection ---------------------------------------
+        const YTD_SALARY_FIELDS = [
+            'gross', 'federal_withheld', 'state_withheld', 'sdi_withheld',
+            'federal_per_paycheck', 'state_per_paycheck', 'paychecks_remaining',
+        ];
+        const YTD_HOUSEHOLD_FIELDS = ['federal_estimated_payments', 'state_estimated_payments'];
+
+        function addYtd(payload) {
+            const ytd = {};
+            const s1 = collectGroup('ytd1_', YTD_SALARY_FIELDS);
+            if (s1) ytd.salary1 = s1;
+            if (payload.dual_income) {
+                const s2 = collectGroup('ytd2_', YTD_SALARY_FIELDS);
+                if (s2) ytd.salary2 = s2;
+            }
+            Object.assign(ytd, collectGroup('ytd_', YTD_HOUSEHOLD_FIELDS) || {});
+            if (Object.keys(ytd).length) payload.ytd = ytd;
             return payload;
+        }
+
+        function ytdBalanceRow(label, b) {
+            const refund = Number(b.refund_or_balance_due) >= 0;
+            return `<div class="row"><span>${label}: ${money(b.payments)} paid vs ${money(b.liability)} owed</span>`
+                + `<span>${refund ? 'Refund' : 'Balance due'} ${money(refund ? b.refund : b.balance_due)}</span></div>`;
+        }
+
+        function displayYtd(y) {
+            if (!y) return '';
+            const salaryLabel = { salary1: 'Salary 1', salary2: 'Salary 2' }[y.suggestion_salary] || '';
+            const suggestions = [];
+            if (y.federal_extra_per_paycheck) {
+                suggestions.push(`<div class="row"><span>Extra federal withholding (W-4 Step 4(c))</span>`
+                    + `<span>${money(y.federal_extra_per_paycheck)} per paycheck</span></div>`);
+            }
+            if (y.state_extra_per_paycheck) {
+                suggestions.push(`<div class="row"><span>Extra state withholding (DE 4)</span>`
+                    + `<span>${money(y.state_extra_per_paycheck)} per paycheck</span></div>`);
+            }
+            const salaries = [['Salary 1', y.salary1], ['Salary 2', y.salary2]]
+                .filter(([, s]) => s)
+                .map(([label, s]) => `<div class="row"><span>${label} projected wages (${s.paychecks_remaining} paychecks left)</span>`
+                    + `<span>${money(s.projected_wages)}</span></div>`)
+                .join('');
+            const hasSdi = Number(y.sdi.liability) !== 0 || Number(y.sdi.payments) !== 0;
+            return `
+                <div class="result-section ytd-result">
+                    <h2>Year-End Refund or Balance Due</h2>
+                    <div class="tax-summary">
+                        ${salaries}
+                        ${ytdBalanceRow('Federal', y.federal)}
+                        ${ytdBalanceRow('State', y.state)}
+                        ${hasSdi ? ytdBalanceRow('SDI', y.sdi) : ''}
+                    </div>
+                    ${suggestions.length ? `
+                    <h3>Suggested extra withholding on ${salaryLabel} (${y.suggestion_paychecks} paychecks left)</h3>
+                    <div class="tax-summary">${suggestions.join('')}</div>` : ''}
+                    <div class="note">Social Security and Medicare are withheld exactly by payroll and are not part of refund or balance due. Self-employment tax is included in the federal balance.</div>
+                </div>`;
         }
 
         function displayErrors(body) {
@@ -218,8 +514,13 @@
         function displayResults(r) {
             const rows = Object.entries(r.liabilities)
                 .filter(([key, value]) => Number(value) !== 0 || key === 'federal_income_tax' || key === 'state_income_tax')
-                .map(([key, value]) => `
-                    <div class="row"><span>${escapeHtml(LIABILITY_LABELS[key] || key)}</span><span>${money(value)}</span></div>`)
+                .map(([key, value]) => {
+                    const tip = LIABILITY_TIPS[key];
+                    const label = escapeHtml(LIABILITY_LABELS[key] || key)
+                        + (tip ? ` <span class="info-tip" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">&#9432;</span>` : '');
+                    return `
+                    <div class="row"><span>${label}</span><span>${money(value)}</span></div>`;
+                })
                 .join('');
             return `
                 <div class="result-section">
@@ -230,6 +531,31 @@
                         <div class="row total"><span>Total projected tax</span><span>${money(r.total_liability)}</span></div>
                         <div class="row"><span>Effective rate</span><span>${(Number(r.effective_rate) * 100).toFixed(2)}%</span></div>
                     </div>
+                </div>${displayTakeHome(r)}`;
+        }
+
+        function percent(s) {
+            return `${parseFloat((Number(s) * 100).toFixed(2))}%`;
+        }
+
+        // Marginal rates and take-home pay (#21)
+        function displayTakeHome(r) {
+            const takeHome = r.take_home;
+            const perPaycheck = takeHome.per_paycheck !== null
+                ? `<div class="row"><span>Take-home per paycheck (${escapeHtml(takeHome.periods_per_year)}/yr)</span><span>${money(takeHome.per_paycheck)}</span></div>`
+                : '';
+            const tip = 'Statutory bracket rate on your next dollar of taxable income. '
+                + 'Ignores credit and deduction phase-outs.';
+            return `
+                <div class="result-section">
+                    <h2>Take-Home Pay</h2>
+                    <div class="tax-summary">
+                        <div class="row total"><span>Take-home pay (annual)</span><span>${money(takeHome.annual)}</span></div>
+                        ${perPaycheck}
+                        <div class="row"><span>Federal marginal rate <span class="info-tip" title="${tip}" aria-label="${tip}">&#9432;</span></span><span>${percent(r.marginal_rates.federal)}</span></div>
+                        <div class="row"><span>State marginal rate</span><span>${percent(r.marginal_rates.state)}</span></div>
+                    </div>
+                    <p class="note">Take-home = wages − pretax deductions − federal and state income tax − SDI − Social Security − Medicare. Self-employment tax is not deducted.</p>
                 </div>`;
         }
 
@@ -245,7 +571,7 @@
                     body: JSON.stringify(buildPayload()),
                 });
                 const body = await resp.json();
-                results.innerHTML = resp.ok ? displayResults(body) : displayErrors(body);
+                results.innerHTML = resp.ok ? displayResults(body) + displayYtd(body.ytd) : displayErrors(body);
             } catch (err) {
                 results.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
             } finally {

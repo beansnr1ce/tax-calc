@@ -5,6 +5,7 @@ Expected values are hand-computed from the 2025/2026 tables with the
 arithmetic shown in comments.
 """
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -62,9 +63,12 @@ def test_quick_projection_single_2025_ca(pipeline):
     assert result.liabilities.state_income_tax == Decimal("3137.182")
     # SDI 2025: 78,000 × 1.2% = 936
     assert result.liabilities.state_sdi == Decimal("936")
-    # Total 8,774 + 3,137.182 + 936 = 12,847.182; ÷ 78,000
-    assert result.total_liability == Decimal("12847.182")
-    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.164707")
+    # FICA 2025: SS 78,000 × 6.2% = 4,836; Medicare 78,000 × 1.45% = 1,131
+    assert result.liabilities.social_security == Decimal("4836")
+    assert result.liabilities.medicare == Decimal("1131")
+    # Total 8,774 + 3,137.182 + 936 + 4,836 + 1,131 = 18,814.182; ÷ 78,000
+    assert result.total_liability == Decimal("18814.182")
+    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.241207")
 
 
 def test_quick_projection_mfj_dual_income_2026_ca(pipeline):
@@ -87,18 +91,23 @@ def test_quick_projection_mfj_dual_income_2026_ca(pipeline):
     #   1%×22,050=220.50  2%×30,223=604.46  4%×30,225=1,209  6%×32,028=1,921.68
     #   8%×30,216=2,417.28  9.3%×183,898=17,102.514 → 23,475.434 − 296 = 23,179.434
     assert result.liabilities.state_income_tax == Decimal("23179.434")
-    # SDI 2026 per employee: 150,000×1.1%=1,650 + min(190,000, 180,000)×1.1%=1,980
-    assert result.liabilities.state_sdi == Decimal("3630")
-    # 59,503 + 23,179.434 + 3,630 = 86,312.434; ÷ 340,000 = 0.2538601
-    assert result.total_liability == Decimal("86312.434")
-    assert result.effective_rate == Decimal("0.2538601")
+    # SDI 2026 at 1.3%, no wage ceiling (SB 951): 150,000×1.3%=1,950 + 190,000×1.3%=2,470
+    assert result.liabilities.state_sdi == Decimal("4420")
+    # FICA 2026: SS 150,000×6.2%=9,300 + 184,500 (capped)×6.2%=11,439 = 20,739
+    #   Medicare 340,000×1.45%=4,930 + Additional (340,000−250,000)×0.9%=810 = 5,740
+    assert result.liabilities.social_security == Decimal("20739")
+    assert result.liabilities.medicare == Decimal("5740")
+    # 59,503 + 23,179.434 + 4,420 + 20,739 + 5,740 = 113,581.434; ÷ 340,000
+    assert result.total_liability == Decimal("113581.434")
+    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.334063")
 
 
 def test_no_income_tax_state_has_no_state_lines(pipeline):
     result = pipeline.project(_quick(state="TX"))
     assert result.liabilities.state_income_tax == Decimal("0")
     assert result.liabilities.state_sdi == Decimal("0")
-    assert result.total_liability == Decimal("8774.00")
+    # 8,774 federal + 4,836 SS + 1,131 Medicare
+    assert result.total_liability == Decimal("14741.00")
 
 
 def test_section_125_deductions_reduce_sdi_wages_but_401k_does_not(pipeline):
@@ -131,3 +140,527 @@ def test_per_paycheck_deductions_without_frequency_are_rejected(pipeline):
         pipeline.project(_quick(pretax_deductions_1={"_401k": 500}))
     codes = {e.code for e in exc_info.value.errors}
     assert "frequency_required" in codes
+
+
+# --- Employee FICA (#19) ---------------------------------------------------
+
+
+def _mfj_2026(**overrides):
+    return _quick(
+        tax_year=2026,
+        filing_status="married_jointly",
+        salary1_annual=150000,
+        dual_income=True,
+        salary2_annual=190000,
+        **overrides,
+    )
+
+
+def test_social_security_is_capped_per_salary(pipeline):
+    result = pipeline.project(_mfj_2026())
+    # 2026 SS wage base 184,500 @ 6.2%:
+    #   salary1 150,000 (below cap) × 6.2% = 9,300
+    #   salary2 190,000 → capped 184,500 × 6.2% = 11,439
+    assert result.fica.salary1.social_security == Decimal("9300")
+    assert result.fica.salary2.social_security == Decimal("11439")
+    assert result.liabilities.social_security == Decimal("20739")
+
+
+def test_additional_medicare_uses_household_threshold_by_filing_status(pipeline):
+    single = pipeline.project(_quick(salary1_annual=260000))
+    # Single threshold 200,000: (260,000 − 200,000) × 0.9% = 540
+    #   regular 260,000 × 1.45% = 3,770 → Medicare line 4,310
+    assert single.fica.additional_medicare == Decimal("540")
+    assert single.liabilities.medicare == Decimal("4310")
+
+    mfj = pipeline.project(
+        _quick(
+            filing_status="married_jointly",
+            salary1_annual=130000,
+            dual_income=True,
+            salary2_annual=130000,
+        )
+    )
+    # MFJ threshold 250,000 on combined wages: (260,000 − 250,000) × 0.9% = 90
+    #   (neither spouse alone is over 200,000)
+    assert mfj.fica.additional_medicare == Decimal("90")
+    assert mfj.liabilities.medicare == Decimal("3860")
+
+
+def test_section_125_reduces_fica_wages_but_401k_does_not(pipeline):
+    result = pipeline.project(
+        _quick(
+            pretax_deductions_1={
+                "input_type": "annual",
+                "_401k": 10000,
+                "ira": 2000,
+                "health_insurance": 3000,
+                "dental": 500,
+                "vision": 200,
+                "fsa": 1000,
+                "hsa": 1300,
+            }
+        )
+    )
+    # FICA wages: 78,000 − (3,000 + 500 + 200 + 1,000 + 1,300) = 72,000
+    #   401(k) and IRA are ignored.
+    assert result.fica.salary1.fica_wages == Decimal("72000")
+    # SS 72,000 × 6.2% = 4,464; Medicare 72,000 × 1.45% = 1,044
+    assert result.liabilities.social_security == Decimal("4464")
+    assert result.liabilities.medicare == Decimal("1044")
+
+
+def test_social_security_wage_base_comes_from_the_year_table(pipeline):
+    y2025 = pipeline.project(_quick(salary1_annual=180000, state="TX"))
+    y2026 = pipeline.project(_quick(tax_year=2026, salary1_annual=180000, state="TX"))
+    # 2025 base 176,100 × 6.2% = 10,918.20 (capped)
+    assert y2025.liabilities.social_security == Decimal("10918.2")
+    # 2026 base 184,500 > 180,000 → 180,000 × 6.2% = 11,160 (uncapped)
+    assert y2026.liabilities.social_security == Decimal("11160")
+
+# --- Refinement inputs (#20) -------------------------------------------------
+
+
+def test_per_paycheck_pretax_with_frequency_annualizes(pipeline):
+    result = pipeline.project(
+        _quick(salary1_frequency="biweekly", pretax_deductions_1={"_401k": 500})
+    )
+    # 401(k): 500 × 26 = 13,000. Federal: 78,000 − 13,000 − 15,000 = 50,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×1,525 = 335.50 → 5,914.00
+    assert result.liabilities.federal_income_tax == Decimal("5914.00")
+    # 401(k) does not reduce SDI wages: 78,000 × 1.2% = 936
+    assert result.liabilities.state_sdi == Decimal("936")
+
+
+def test_1099_nec_income_adds_self_employment_tax_line(pipeline):
+    result = pipeline.project(_quick(income_1099nec=20000))
+
+    assert result.gross_income == Decimal("98000")
+    # SE income 20,000 × 0.9235 = 18,470
+    #   SS 12.4% = 2,290.28; Medicare 2.9% = 535.63 → 2,825.91
+    assert result.liabilities.self_employment_tax == Decimal("2825.91")
+    # AGI 98,000 − ½SE 1,412.955 = 96,587.045; − 15,000 std = 81,587.045 taxable
+    #   1,192.50 + 4,386.00 + 22%×33,112.045 = 7,284.6499 → 12,863.1499
+    assert result.liabilities.federal_income_tax == Decimal("12863.1499")
+    # CA from federal AGI: 96,587.045 − 5,540 = 91,047.045 taxable
+    #   3,108.76 through 8% + 9.3%×20,441.045 = 1,901.017185 → 5,009.777185 − 144
+    assert result.liabilities.state_income_tax == Decimal("4865.777185")
+    # SDI applies to W-2 wages only: 78,000 × 1.2% = 936
+    assert result.liabilities.state_sdi == Decimal("936")
+    # FICA on W-2 wages: SS 78,000 × 6.2% = 4,836; Medicare 78,000 × 1.45% = 1,131
+    # 12,863.1499 + 2,825.91 + 4,865.777185 + 936 + 4,836 + 1,131
+    assert result.total_liability == Decimal("27457.837085")
+
+
+def test_children_reduce_federal_and_state_tax_through_credits(pipeline):
+    result = pipeline.project(_quick(children_under_17=2))
+    # Federal CTC 2 × 2,000 = 4,000: 8,774 − 4,000 = 4,774
+    assert result.liabilities.federal_income_tax == Decimal("4774.00")
+    # CA dependent credit 2 × 446 = 892: 3,137.182 − 892 = 2,245.182
+    assert result.liabilities.state_income_tax == Decimal("2245.182")
+
+
+def test_itemized_deductions_above_standard_are_used(pipeline):
+    result = pipeline.project(
+        _quick(itemized_deductions={"mortgage_interest": 20000, "charitable": 5000})
+    )
+    # Itemized 25,000 > 15,000 std: 78,000 − 25,000 = 53,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×4,525 = 995.50 → 6,574.00
+    assert result.liabilities.federal_income_tax == Decimal("6574.00")
+
+
+def test_itemized_deductions_below_standard_fall_back_to_standard(pipeline):
+    result = pipeline.project(_quick(itemized_deductions={"charitable": 5000}))
+    assert result.liabilities.federal_income_tax == Decimal("8774.00")
+
+
+def test_student_loan_interest_reduces_federal_tax(pipeline):
+    result = pipeline.project(_quick(student_loan_interest=2000))
+    # AGI 76,000 − 15,000 = 61,000 taxable: 8,774 − 22%×2,000 = 8,334
+    assert result.liabilities.federal_income_tax == Decimal("8334.00")
+
+
+def test_other_1099_income_is_taxed_without_self_employment_tax(pipeline):
+    result = pipeline.project(
+        _quick(income_1099g=1000, income_1099int_div=500, other_income=500)
+    )
+    assert result.gross_income == Decimal("80000")
+    assert result.liabilities.self_employment_tax == Decimal("0")
+    # 65,000 taxable: 8,774 + 22%×2,000 = 9,214
+    assert result.liabilities.federal_income_tax == Decimal("9214.00")
+
+
+# --- YTD / paystub projection (#22) -----------------------------------------
+
+AS_OF = date(2025, 11, 18)
+
+
+def _ytd(**overrides):
+    """Single, 2025, CA, 78,000/yr biweekly (3,000 per paycheck)."""
+    return _quick(salary1_frequency="biweekly", **overrides)
+
+
+def test_ytd_projected_wages_are_ytd_gross_plus_remaining_paychecks(pipeline):
+    result = pipeline.project(
+        _ytd(ytd={"salary1": {"gross": 61000, "paychecks_remaining": 6}}),
+        as_of=AS_OF,
+    )
+    # 61,000 + 6 × (78,000 ÷ 26 = 3,000) = 79,000 feeds the facts
+    assert result.ytd.salary1.projected_wages == Decimal("79000")
+    assert result.ytd.salary1.paychecks_remaining == 6
+    assert result.gross_income == Decimal("79000")
+    # FICA follows projected wages: 79,000 × 6.2% = 4,898
+    assert result.liabilities.social_security == Decimal("4898")
+
+
+def test_projection_without_ytd_data_has_no_ytd_section(pipeline):
+    assert pipeline.project(_quick()).ytd is None
+
+
+# Baseline for the cases below: 60,000 YTD gross (20 of 26 paychecks) + 6 × 3,000
+# = 78,000 projected wages, so liabilities match test_quick_projection_single_2025_ca:
+# federal 8,774; CA 3,137.182; SDI 936.
+def _paystub(federal_withheld, federal_per_paycheck, state_withheld, state_per_paycheck, **extra):
+    salary1 = {
+        "gross": 60000,
+        "federal_withheld": federal_withheld,
+        "federal_per_paycheck": federal_per_paycheck,
+        "state_withheld": state_withheld,
+        "state_per_paycheck": state_per_paycheck,
+        "sdi_withheld": 720,  # 60,000 × 1.2%
+        "paychecks_remaining": 6,
+    }
+    return _ytd(ytd={"salary1": salary1, **extra})
+
+
+def test_ytd_refund_for_federal_and_state(pipeline):
+    ytd = pipeline.project(_paystub(7000, 350, 2500, 120), as_of=AS_OF).ytd
+
+    # Federal: 7,000 + 6 × 350 = 9,100 paid vs 8,774 owed → 326 refund
+    assert ytd.federal.liability == Decimal("8774.00")
+    assert ytd.federal.payments == Decimal("9100")
+    assert ytd.federal.refund_or_balance_due == Decimal("326")
+    assert ytd.federal.refund == Decimal("326")
+    assert ytd.federal.balance_due == Decimal("0")
+    # State: 2,500 + 6 × 120 = 3,220 paid vs 3,137.182 → 82.818 refund
+    assert ytd.state.payments == Decimal("3220")
+    assert ytd.state.refund == Decimal("82.818")
+    # No extra withholding is suggested when a refund is projected
+    assert ytd.federal_extra_per_paycheck is None
+    assert ytd.state_extra_per_paycheck is None
+    assert ytd.suggestion_salary is None
+
+
+def test_ytd_balance_due_suggests_extra_withholding_per_paycheck(pipeline):
+    ytd = pipeline.project(_paystub(6000, 300, 2200, 100), as_of=AS_OF).ytd
+
+    # Federal: 6,000 + 6 × 300 = 7,800 vs 8,774 → 974 due; 974 ÷ 6 per paycheck
+    assert ytd.federal.refund_or_balance_due == Decimal("-974")
+    assert ytd.federal.balance_due == Decimal("974")
+    assert ytd.federal_extra_per_paycheck.quantize(Decimal("0.01")) == Decimal("162.33")
+    # State: 2,200 + 6 × 100 = 2,800 vs 3,137.182 → 337.182 due; ÷ 6 = 56.197
+    assert ytd.state.balance_due == Decimal("337.182")
+    assert ytd.state_extra_per_paycheck == Decimal("56.197")
+    assert ytd.suggestion_salary == "salary1"
+    assert ytd.suggestion_paychecks == 6
+
+
+def test_ytd_estimated_payments_count_toward_projected_payments(pipeline):
+    ytd = pipeline.project(
+        _paystub(
+            6000, 300, 2200, 100,
+            federal_estimated_payments=1000,
+            state_estimated_payments=400,
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Federal: 7,800 withheld + 1,000 estimated = 8,800 vs 8,774 → 26 refund
+    assert ytd.federal.payments == Decimal("8800")
+    assert ytd.federal.refund == Decimal("26")
+    # State: 2,800 + 400 = 3,200 vs 3,137.182 → 62.818 refund
+    assert ytd.state.refund == Decimal("62.818")
+
+
+def test_ytd_sdi_payments_project_rate_on_remaining_wages(pipeline):
+    ytd = pipeline.project(_paystub(7000, 350, 2500, 120), as_of=AS_OF).ytd
+    # 720 YTD + 1.2% × 18,000 remaining = 936 vs 936 liability
+    assert ytd.sdi.payments == Decimal("936")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
+
+
+def test_ca_sdi_has_no_wage_ceiling(pipeline):
+    result = pipeline.project(_quick(salary1_annual=300000))
+    # SB 951: no SDI wage base since 2024. 300,000 × 1.2% = 3,600
+    assert result.liabilities.state_sdi == Decimal("3600")
+
+
+def test_ytd_sdi_payments_have_no_wage_ceiling(pipeline):
+    ytd = pipeline.project(
+        _quick(
+            salary1_annual=260000,
+            salary1_frequency="biweekly",
+            ytd={"salary1": {"gross": 170000, "sdi_withheld": 2040, "paychecks_remaining": 6}},
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Remaining 6 × 10,000 = 60,000, all subject to SDI:
+    #   2,040 + 1.2% × 60,000 = 2,760 = 1.2% × 230,000 projected wages
+    assert ytd.sdi.payments == Decimal("2760")
+    assert ytd.sdi.liability == Decimal("2760")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
+
+
+def test_ytd_remaining_sdi_uses_wages_less_section_125(pipeline):
+    ytd = pipeline.project(
+        _ytd(
+            pretax_deductions_1={"health_insurance": 100},  # per paycheck, 2,600/yr
+            ytd={
+                "salary1": {
+                    "gross": 60000,
+                    "sdi_withheld": 696,  # (60,000 − 20 × 100) × 1.2%
+                    "paychecks_remaining": 6,
+                }
+            },
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Liability: (78,000 − 2,600) × 1.2% = 904.80
+    # Payments: 696 + 6 × (3,000 − 100) × 1.2% = 696 + 208.80 = 904.80
+    assert ytd.sdi.liability == Decimal("904.8")
+    assert ytd.sdi.payments == Decimal("904.8")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
+
+
+def test_ytd_refund_or_owe_excludes_fica_but_includes_se_tax(pipeline):
+    result = pipeline.project(
+        _paystub(7000, 350, 2500, 120) | {"income_1099nec": 10000}, as_of=AS_OF
+    )
+    # SE: 10,000 × 0.9235 = 9,235 × 15.3% = 1,412.955; half = 706.4775
+    # Taxable: 88,000 − 706.4775 − 15,000 = 72,293.5225
+    # Income tax: 8,774 + 22% × 9,293.5225 = 10,818.57495
+    # Federal liability: 10,818.57495 + 1,412.955 = 12,231.52995 (no SS/Medicare)
+    assert result.ytd.federal.liability == Decimal("12231.52995")
+    assert result.ytd.federal.refund_or_balance_due == Decimal("-3131.52995")  # 9,100 paid
+    assert result.liabilities.social_security > 0  # FICA is still a liability line
+
+
+def test_ytd_zero_paychecks_remaining_balance_due_has_no_suggestion(pipeline):
+    ytd = pipeline.project(
+        _ytd(
+            ytd={"salary1": {"gross": 78000, "federal_withheld": 7000, "paychecks_remaining": 0}}
+        ),
+        as_of=AS_OF,
+    ).ytd
+    assert ytd.salary1.projected_wages == Decimal("78000")
+    assert ytd.federal.balance_due == Decimal("1774")  # 8,774 − 7,000
+    assert ytd.federal_extra_per_paycheck is None
+    assert ytd.state_extra_per_paycheck is None
+    assert ytd.suggestion_salary is None
+
+
+@pytest.mark.parametrize(
+    "frequency, expected",
+    [
+        # As of 2025-11-18: 43 days left in the year
+        ("weekly", 6),  # 43 // 7
+        ("biweekly", 3),  # 43 // 14
+        ("semimonthly", 3),  # Nov 30, Dec 15, Dec 31
+        ("monthly", 2),  # Nov 30, Dec 31
+    ],
+)
+def test_ytd_default_paychecks_remaining_by_frequency(pipeline, frequency, expected):
+    result = pipeline.project(
+        _quick(salary1_frequency=frequency, ytd={"salary1": {"gross": 60000}}),
+        as_of=AS_OF,
+    )
+    assert result.ytd.salary1.paychecks_remaining == expected
+
+
+def test_ytd_paychecks_remaining_default_outside_the_tax_year(pipeline):
+    before = pipeline.project(_ytd(ytd={"salary1": {"gross": 0}}), as_of=date(2024, 12, 20))
+    after = pipeline.project(_ytd(ytd={"salary1": {"gross": 60000}}), as_of=date(2026, 1, 5))
+    assert before.ytd.salary1.paychecks_remaining == 26
+    assert after.ytd.salary1.paychecks_remaining == 0
+
+
+def test_ytd_paychecks_remaining_override_wins(pipeline):
+    result = pipeline.project(
+        _ytd(ytd={"salary1": {"gross": 60000, "paychecks_remaining": 5}}), as_of=AS_OF
+    )
+    assert result.ytd.salary1.paychecks_remaining == 5
+    assert result.ytd.salary1.projected_wages == Decimal("75000")  # 60,000 + 5 × 3,000
+
+
+def test_ytd_without_pay_frequency_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_quick(ytd={"salary1": {"gross": 60000}}), as_of=AS_OF)
+    assert any(
+        e.field == "salary1_frequency" and e.code == "frequency_required"
+        for e in exc.value.errors
+    )
+
+
+def test_ytd_estimated_payments_alone_also_require_frequency(pipeline):
+    with pytest.raises(FactsError):
+        pipeline.project(_quick(ytd={"federal_estimated_payments": 500}), as_of=AS_OF)
+
+
+def test_ytd_negative_amount_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_ytd(ytd={"salary1": {"gross": -1}}), as_of=AS_OF)
+    assert any(e.field == "ytd.salary1.gross" and e.code == "range" for e in exc.value.errors)
+
+
+def test_blank_ytd_fields_mean_no_ytd_projection(pipeline):
+    result = pipeline.project(
+        _quick(ytd={"salary1": {"gross": ""}, "federal_estimated_payments": ""})
+    )
+    assert result.ytd is None
+
+
+def test_dual_income_ytd_suggests_on_salary_with_most_paychecks_left(pipeline):
+    result = pipeline.project(
+        _ytd(
+            dual_income=True,
+            salary2_annual=24000,
+            salary2_frequency="monthly",
+            ytd={
+                "salary1": {"gross": 60000, "paychecks_remaining": 6},
+                "salary2": {"gross": 22000, "paychecks_remaining": 1},
+            },
+        ),
+        as_of=AS_OF,
+    )
+    ytd = result.ytd
+    assert ytd.salary2.projected_wages == Decimal("24000")  # 22,000 + 1 × 2,000
+    assert result.wage_income == Decimal("102000")  # 78,000 + 24,000
+    # Nothing withheld → balance due; the suggestion goes on salary1 (6 paychecks)
+    assert ytd.suggestion_salary == "salary1"
+    assert ytd.suggestion_paychecks == 6
+
+# --- Marginal rates and take-home (#21) -------------------------------------
+
+
+def test_marginal_rates_come_from_the_bracket_containing_taxable_income(pipeline):
+    # Single 2025 CA, 78,000: federal taxable 63,000 is in the 22% bracket
+    # (48,475–103,350); CA taxable 72,460 is in the 9.3% bracket (70,606–360,659).
+    result = pipeline.project(_quick())
+    assert result.marginal_rates.federal == Decimal("0.22")
+    assert result.marginal_rates.state == Decimal("0.093")
+
+
+def test_mfj_marginal_rates(pipeline):
+    # MFJ 2026: federal taxable 309,200 in 24% (212,500–405,650); CA 328,640 in 9.3%.
+    result = pipeline.project(_mfj_2026())
+    assert result.marginal_rates.federal == Decimal("0.24")
+    assert result.marginal_rates.state == Decimal("0.093")
+
+
+@pytest.mark.parametrize(
+    "salary, expected",
+    [
+        # 63,475 − 15,000 = 48,475: exactly the 22% floor, so the next dollar is 22%
+        (63475, Decimal("0.22")),
+        # one dollar below the floor: still 12%
+        (63474, Decimal("0.12")),
+    ],
+)
+def test_federal_marginal_rate_at_bracket_boundary(pipeline, salary, expected):
+    result = pipeline.project(_quick(state="TX", salary1_annual=salary))
+    assert result.marginal_rates.federal == expected
+
+
+def test_state_marginal_rate_at_bracket_boundary(pipeline):
+    # 76,146 − 5,540 CA std = 70,606: exactly the 9.3% floor
+    result = pipeline.project(_quick(salary1_annual=76146))
+    assert result.marginal_rates.state == Decimal("0.093")
+    # 76,145 → 70,605: still 8%
+    below = pipeline.project(_quick(salary1_annual=76145))
+    assert below.marginal_rates.state == Decimal("0.08")
+
+
+def test_no_income_tax_state_has_zero_state_marginal_rate(pipeline):
+    result = pipeline.project(_quick(state="TX"))
+    assert result.marginal_rates.state == Decimal("0")
+
+
+def test_annual_take_home_single(pipeline):
+    result = pipeline.project(_quick())
+    # 78,000 − 8,774 fed − 3,137.182 CA − 936 SDI − 4,836 SS − 1,131 Medicare
+    assert result.take_home.annual == Decimal("59185.818")
+
+
+def test_annual_take_home_mfj(pipeline):
+    result = pipeline.project(_mfj_2026())
+    # 340,000 − 59,503 − 23,179.434 − 4,420 − 20,739 − 5,740 = 226,418.566
+    assert result.take_home.annual == Decimal("226418.566")
+
+
+def test_annual_take_home_subtracts_pretax_deductions(pipeline):
+    result = pipeline.project(
+        _quick(
+            state="TX",
+            pretax_deductions_1={"input_type": "annual", "_401k": 10000, "health_insurance": 3000},
+        )
+    )
+    # Federal: 78,000 − 13,000 − 15,000 = 50,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×1,525=335.50 → 5,914
+    # FICA wages 75,000: SS 4,650; Medicare 1,087.50
+    # 78,000 − 13,000 − 5,914 − 4,650 − 1,087.50 = 53,348.50
+    assert result.take_home.annual == Decimal("53348.50")
+
+
+def test_per_paycheck_take_home_divides_annual_by_pay_periods(pipeline):
+    result = pipeline.project(
+        _quick(salary1_annual=None, salary1_gross=3000, salary1_frequency="biweekly")
+    )
+    # 59,185.818 ÷ 26 = 2,276.3776…
+    assert result.take_home.periods_per_year == 26
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("2276.38")
+
+
+def test_per_paycheck_take_home_absent_without_frequency(pipeline):
+    result = pipeline.project(_quick())
+    assert result.take_home.per_paycheck is None
+    assert result.take_home.periods_per_year is None
+
+
+def test_per_paycheck_take_home_uses_salary2_frequency_when_salary1_has_none(pipeline):
+    result = pipeline.project(_mfj_2026(salary2_frequency="biweekly"))
+    # 226,418.566 ÷ 26 = 8,708.4064 (household frequency is salary2's)
+    assert result.take_home.periods_per_year == 26
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("8708.41")
+
+
+def test_per_paycheck_take_home_uses_shared_household_frequency(pipeline):
+    result = pipeline.project(_mfj_2026(salary1_frequency="monthly", salary2_frequency="monthly"))
+    # 226,418.566 ÷ 12 = 18,868.2138
+    assert result.take_home.periods_per_year == 12
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("18868.21")
+
+
+def test_per_paycheck_take_home_absent_when_frequencies_differ(pipeline):
+    result = pipeline.project(_mfj_2026(salary1_frequency="monthly", salary2_frequency="biweekly"))
+    assert result.take_home.periods_per_year is None
+    assert result.take_home.per_paycheck is None
+    assert result.take_home.annual == Decimal("226418.566")
+
+
+def test_ytd_salary_block_without_gross_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_ytd(ytd={"salary1": {"federal_withheld": 6000}}), as_of=AS_OF)
+    assert any(e.field == "ytd.salary1.gross" and e.code == "missing" for e in exc.value.errors)
+
+
+def test_dual_income_ytd_requires_a_salary2_block(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(
+            _ytd(
+                dual_income=True,
+                salary2_annual=24000,
+                salary2_frequency="monthly",
+                ytd={"salary1": {"gross": 60000}},
+            ),
+            as_of=AS_OF,
+        )
+    assert any(e.field == "ytd.salary2.gross" and e.code == "missing" for e in exc.value.errors)

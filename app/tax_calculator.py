@@ -10,6 +10,7 @@ helpers, and exposes `TaxPipeline` plus a backwards-compatible
 from __future__ import annotations
 
 import os
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,6 +19,7 @@ from .federal_tax import FederalEngine, FederalResult
 from .projection import ProjectionEngine, ProjectionResult
 from .state_tax import StateEngineRegistry
 from .state_tax.states import register_overrides
+from .state_tax.states.california import sdi_taxable_wages
 from .tax_facts import TaxFacts, build_facts
 from .tax_registry import FilesystemSource, TaxTableRegistry
 
@@ -48,9 +50,12 @@ class TaxPipeline:
     def compute_federal(self, facts: TaxFacts) -> FederalResult:
         return self._fed.compute(facts)
 
-    def project(self, raw_inputs: Mapping[str, Any]) -> ProjectionResult:
-        """Annual Tax Projection. Raises FactsError on invalid input."""
-        return self._projection.project(raw_inputs)
+    def project(
+        self, raw_inputs: Mapping[str, Any], *, as_of: date | None = None
+    ) -> ProjectionResult:
+        """Annual Tax Projection. Raises FactsError on invalid input.
+        `as_of` (default today) dates YTD paystub data."""
+        return self._projection.project(raw_inputs, as_of=as_of)
 
     def calculate_all(self, facts: TaxFacts | Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(facts, TaxFacts):
@@ -112,10 +117,9 @@ class TaxPipeline:
         if state_code == "CA":
             sdi_extra = self._tables.extra(state_code, year, "sdi")
             sdi_block["rate"] = float(sdi_extra["rate"]) * 100
-            sdi_block["wage_base"] = float(sdi_extra["wage_base"])
-            sdi_block["taxable_wages"] = min(
-                float(inp.wages_w2), float(sdi_extra["wage_base"])
-            )
+            wage_base = sdi_extra.get("wage_base")
+            sdi_block["wage_base"] = float(wage_base) if wage_base is not None else None
+            sdi_block["taxable_wages"] = float(sdi_taxable_wages(inp.wages_w2, sdi_extra))
 
         return {
             "agi": float(result.starting_income),
