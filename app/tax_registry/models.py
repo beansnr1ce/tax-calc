@@ -40,6 +40,16 @@ class BracketTable:
             total += (top - bracket.floor) * bracket.rate
         return total
 
+    def marginal_rate(self, taxable: Decimal) -> Decimal:
+        """Statutory rate on the next dollar: the last bracket whose floor is
+        at or below `taxable` (at an exact floor, the higher bracket)."""
+        rate = self.brackets[0].rate
+        for bracket in self.brackets:
+            if bracket.floor > taxable:
+                break
+            rate = bracket.rate
+        return rate
+
     def iter_breakdown(self, taxable: Decimal) -> tuple[BracketLine, ...]:
         if taxable <= 0:
             return ()

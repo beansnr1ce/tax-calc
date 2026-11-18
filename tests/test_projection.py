@@ -287,3 +287,90 @@ def test_other_1099_income_is_taxed_without_self_employment_tax(pipeline):
     assert result.liabilities.self_employment_tax == Decimal("0")
     # 65,000 taxable: 8,774 + 22%×2,000 = 9,214
     assert result.liabilities.federal_income_tax == Decimal("9214.00")
+
+
+# --- Marginal rates and take-home (#21) -------------------------------------
+
+
+def test_marginal_rates_come_from_the_bracket_containing_taxable_income(pipeline):
+    # Single 2025 CA, 78,000: federal taxable 63,000 is in the 22% bracket
+    # (48,475–103,350); CA taxable 72,460 is in the 9.3% bracket (70,606–360,659).
+    result = pipeline.project(_quick())
+    assert result.marginal_rates.federal == Decimal("0.22")
+    assert result.marginal_rates.state == Decimal("0.093")
+
+
+def test_mfj_marginal_rates(pipeline):
+    # MFJ 2026: federal taxable 309,200 in 24% (212,500–405,650); CA 328,640 in 9.3%.
+    result = pipeline.project(_mfj_2026())
+    assert result.marginal_rates.federal == Decimal("0.24")
+    assert result.marginal_rates.state == Decimal("0.093")
+
+
+@pytest.mark.parametrize(
+    "salary, expected",
+    [
+        # 63,475 − 15,000 = 48,475: exactly the 22% floor, so the next dollar is 22%
+        (63475, Decimal("0.22")),
+        # one dollar below the floor: still 12%
+        (63474, Decimal("0.12")),
+    ],
+)
+def test_federal_marginal_rate_at_bracket_boundary(pipeline, salary, expected):
+    result = pipeline.project(_quick(state="TX", salary1_annual=salary))
+    assert result.marginal_rates.federal == expected
+
+
+def test_state_marginal_rate_at_bracket_boundary(pipeline):
+    # 76,146 − 5,540 CA std = 70,606: exactly the 9.3% floor
+    result = pipeline.project(_quick(salary1_annual=76146))
+    assert result.marginal_rates.state == Decimal("0.093")
+    # 76,145 → 70,605: still 8%
+    below = pipeline.project(_quick(salary1_annual=76145))
+    assert below.marginal_rates.state == Decimal("0.08")
+
+
+def test_no_income_tax_state_has_zero_state_marginal_rate(pipeline):
+    result = pipeline.project(_quick(state="TX"))
+    assert result.marginal_rates.state == Decimal("0")
+
+
+def test_annual_take_home_single(pipeline):
+    result = pipeline.project(_quick())
+    # 78,000 − 8,774 fed − 3,137.182 CA − 936 SDI − 4,836 SS − 1,131 Medicare
+    assert result.take_home.annual == Decimal("59185.818")
+
+
+def test_annual_take_home_mfj(pipeline):
+    result = pipeline.project(_mfj_2026())
+    # 340,000 − 59,503 − 23,179.434 − 3,630 − 20,739 − 5,740 = 227,208.566
+    assert result.take_home.annual == Decimal("227208.566")
+
+
+def test_annual_take_home_subtracts_pretax_deductions(pipeline):
+    result = pipeline.project(
+        _quick(
+            state="TX",
+            pretax_deductions_1={"input_type": "annual", "_401k": 10000, "health_insurance": 3000},
+        )
+    )
+    # Federal: 78,000 − 13,000 − 15,000 = 50,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×1,525=335.50 → 5,914
+    # FICA wages 75,000: SS 4,650; Medicare 1,087.50
+    # 78,000 − 13,000 − 5,914 − 4,650 − 1,087.50 = 53,348.50
+    assert result.take_home.annual == Decimal("53348.50")
+
+
+def test_per_paycheck_take_home_divides_annual_by_pay_periods(pipeline):
+    result = pipeline.project(
+        _quick(salary1_annual=None, salary1_gross=3000, salary1_frequency="biweekly")
+    )
+    # 59,185.818 ÷ 26 = 2,276.3776…
+    assert result.take_home.periods_per_year == 26
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("2276.38")
+
+
+def test_per_paycheck_take_home_absent_without_frequency(pipeline):
+    result = pipeline.project(_quick())
+    assert result.take_home.per_paycheck is None
+    assert result.take_home.periods_per_year is None

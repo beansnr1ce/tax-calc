@@ -14,7 +14,7 @@ from app.state_tax import StateEngineRegistry
 from app.tax_facts import FactsError, FieldError, SalaryFacts, TaxFacts, build_facts
 from app.tax_registry import TaxTableRegistry
 
-from .result import EmployeeFica, Liabilities, ProjectionResult
+from .result import EmployeeFica, Liabilities, MarginalRates, ProjectionResult, TakeHome
 
 _ZERO = Decimal("0")
 
@@ -44,6 +44,14 @@ class ProjectionEngine:
         )
 
         fica = self._fica(facts)
+        liabilities = Liabilities(
+            federal_income_tax=fed.final_tax,
+            self_employment_tax=fed.se_tax.total,
+            state_income_tax=state_result.final_tax,
+            state_sdi=self._sdi(facts),
+            social_security=fica.social_security,
+            medicare=fica.total_medicare,
+        )
 
         return ProjectionResult(
             tax_year=facts.tax_year,
@@ -51,15 +59,13 @@ class ProjectionEngine:
             state=facts.state,
             gross_income=fed.gross_income,
             wage_income=facts.total_w2_wages,
-            liabilities=Liabilities(
-                federal_income_tax=fed.final_tax,
-                self_employment_tax=fed.se_tax.total,
-                state_income_tax=state_result.final_tax,
-                state_sdi=self._sdi(facts),
-                social_security=fica.social_security,
-                medicare=fica.total_medicare,
-            ),
+            liabilities=liabilities,
             fica=fica,
+            marginal_rates=MarginalRates(
+                federal=self._marginal_rate("federal", facts, fed.taxable_income),
+                state=self._marginal_rate(facts.state, facts, state_result.taxable_income),
+            ),
+            take_home=_take_home(facts, liabilities, fica),
         )
 
     def _build_facts(self, raw: Mapping[str, Any]) -> TaxFacts:
@@ -102,6 +108,14 @@ class ProjectionEngine:
             * p["additional_medicare_rate"],
         )
 
+    def _marginal_rate(self, jurisdiction: str, facts: TaxFacts, taxable: Decimal) -> Decimal:
+        """Bracket rate on the next dollar; 0 where there is no bracket table
+        (no-income-tax states)."""
+        if jurisdiction not in self._tables.jurisdictions():
+            return _ZERO
+        profile = self._tables.profile(jurisdiction, facts.tax_year, facts.filing_status)
+        return profile.brackets.marginal_rate(taxable)
+
     def _sdi(self, facts: TaxFacts) -> Decimal:
         """State disability insurance, per employee: each salary's SDI wages
         are capped at the wage base separately (unlike the household-combined
@@ -122,6 +136,23 @@ class ProjectionEngine:
             return self._tables.extra(state, year, "sdi")
         except KeyError:
             return None
+
+
+def _take_home(facts: TaxFacts, liabilities: Liabilities, fica: EmployeeFica) -> TakeHome:
+    annual = (
+        facts.total_w2_wages
+        - facts.total_pretax
+        - liabilities.federal_income_tax
+        - liabilities.state_income_tax
+        - liabilities.state_sdi
+        - fica.total
+    )
+    periods = facts.salary1.periods_per_year
+    return TakeHome(
+        annual=annual,
+        periods_per_year=periods,
+        per_paycheck=annual / periods if periods else None,
+    )
 
 
 def _payroll_wages(salary: SalaryFacts) -> Decimal:

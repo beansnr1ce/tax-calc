@@ -419,6 +419,31 @@
                         <div class="row total"><span>Total projected tax</span><span>${money(r.total_liability)}</span></div>
                         <div class="row"><span>Effective rate</span><span>${(Number(r.effective_rate) * 100).toFixed(2)}%</span></div>
                     </div>
+                </div>${displayTakeHome(r)}`;
+        }
+
+        function percent(s) {
+            return `${parseFloat((Number(s) * 100).toFixed(2))}%`;
+        }
+
+        // Marginal rates and take-home pay (#21)
+        function displayTakeHome(r) {
+            const th = r.take_home;
+            const perPaycheck = th.per_paycheck !== null
+                ? `<div class="row"><span>Take-home per paycheck (${escapeHtml(th.periods_per_year)}/yr)</span><span>${money(th.per_paycheck)}</span></div>`
+                : '';
+            const tip = 'Statutory bracket rate on your next dollar of taxable income. '
+                + 'Ignores credit and deduction phase-outs.';
+            return `
+                <div class="result-section">
+                    <h2>Take-Home Pay</h2>
+                    <div class="tax-summary">
+                        <div class="row total"><span>Take-home pay (annual)</span><span>${money(th.annual)}</span></div>
+                        ${perPaycheck}
+                        <div class="row"><span>Federal marginal rate <span class="info-tip" title="${tip}" aria-label="${tip}">&#9432;</span></span><span>${percent(r.marginal_rates.federal)}</span></div>
+                        <div class="row"><span>State marginal rate</span><span>${percent(r.marginal_rates.state)}</span></div>
+                    </div>
+                    <p class="note">Take-home = wages − pretax deductions − federal and state income tax − SDI − Social Security − Medicare. Self-employment tax is not deducted.</p>
                 </div>`;
         }
 
