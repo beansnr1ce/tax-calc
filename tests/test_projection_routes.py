@@ -117,7 +117,7 @@ def test_project_response_includes_employee_fica_lines(client):
     assert body["liabilities"]["social_security"] == "4836.00"
     assert body["liabilities"]["medicare"] == "1131.00"
     assert body["fica"]["additional_medicare"] == "0.00"
-    assert body["fica"]["salary1_social_security"] == "4836.00"
+    assert body["fica"]["salary1"]["social_security"] == "4836.00"
 
 
 def test_projection_page_explains_additional_medicare_withholding(client):
@@ -160,7 +160,7 @@ def test_project_response_includes_ytd_section(client):
     assert ytd["federal"] == {
         "liability": "8774.00",
         "payments": "7800.00",
-        "balance": "-974.00",
+        "refund_or_balance_due": "-974.00",
         "refund": "0.00",
         "balance_due": "974.00",
     }
@@ -213,3 +213,23 @@ def test_projection_page_renders_marginal_rates_and_take_home(client):
     assert "State marginal rate" in html
     assert "Take-home pay (annual)" in html
     assert "Take-home per paycheck" in html
+
+
+def test_ytd_without_gross_returns_400(client):
+    resp = client.post(
+        "/project",
+        json=_payload(salary1_frequency="biweekly", ytd={"salary1": {"federal_withheld": 6000}}),
+    )
+    assert resp.status_code == 400
+    assert any(
+        f["field"] == "ytd.salary1.gross" and f["code"] == "missing"
+        for f in resp.get_json()["fields"]
+    )
+
+
+def test_projection_page_disables_per_paycheck_pretax_until_frequency_chosen(client):
+    html = client.get("/projection").get_data(as_text=True)
+    # Pay frequency defaults to "Not specified", so "Per paycheck" starts disabled;
+    # the page's script enables it once a frequency is selected.
+    assert html.count('<option value="per_period" disabled hidden>') == 2
+    assert "syncPerPaycheckOption" in html

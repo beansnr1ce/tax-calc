@@ -35,11 +35,13 @@ The Additional Medicare Tax applies to combined household wages against the fili
 
 - Section 125 deductions (health insurance, dental, vision, FSA, HSA) reduce FICA and CA SDI wages.
 - 401(k), IRA and `other` do not. Treating `other` this way is conservative: it may overstate payroll tax slightly.
-- Projection SDI is computed per employee in the projection layer: each salary is capped at the wage base separately. `CaliforniaEngine`'s household-combined SDI addon is left alone, so withholding-calculator and golden outputs do not change.
+- Projection SDI is computed per employee in the projection layer, on payroll wages. CA SDI has had no wage ceiling since 2024 (SB 951), so the CA tables omit `wage_base` (absent = uncapped) and the 2026 rate is 1.3%. `wage_base` stays supported: when present, the projection caps each salary separately while `CaliforniaEngine`'s addon caps combined household wages. Golden outputs did not change.
+- Remaining-year SDI payments use the same payroll-wage basis as the SDI liability, so a constant salary shows no spurious SDI refund.
 - Treating HSA payroll contributions as reducing CA SDI wages follows the cafeteria-plan treatment and is a simplification.
 
 ## Consequences
 
 - Two code paths compute overlapping numbers, such as SDI, slightly differently. The projection is the more accurate of the two.
-- Self-employment tax is not coordinated with W-2 wages for the Social Security wage base, and Additional Medicare is not applied to SE income. Both are known gaps, inherited from `FederalEngine`.
+- Self-employment tax is not coordinated with W-2 wages for the Social Security wage base. Known gap, inherited from `FederalEngine`.
+- Additional Medicare Tax on self-employment income (Form 8959 Part II: SE earnings count toward the threshold, reduced by W-2 Medicare wages) is not implemented. The projection applies Additional Medicare to household FICA wages only, so households with large SE income above the threshold are under-projected by up to 0.9% of that income. Known gap; deliberately deferred.
 - Employee FICA rates, the Social Security wage base and Additional Medicare thresholds live in the federal tax tables under `extras.fica` (2025, 2026). `limits.se_tax_ss_wage_base` duplicates the wage base for `FederalEngine`; the 2026 value was corrected from an estimate (181,200) to SSA's final 184,500.

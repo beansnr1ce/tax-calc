@@ -9,6 +9,13 @@ from ..engines import StandardStateEngine
 from ..types import StateTaxInput
 
 
+def sdi_taxable_wages(wages: Decimal, sdi: Mapping[str, Decimal]) -> Decimal:
+    """Wages subject to SDI: capped at `wage_base` when the table has one
+    (null/absent = uncapped)."""
+    base = sdi.get("wage_base")
+    return wages if base is None else min(wages, base)
+
+
 class CaliforniaEngine(StandardStateEngine):
     def compute_surcharges(
         self, inp: StateTaxInput, profile: TaxYearProfile, taxable_income: Decimal
@@ -26,11 +33,10 @@ class CaliforniaEngine(StandardStateEngine):
     def compute_addons(
         self, inp: StateTaxInput, profile: TaxYearProfile, taxable_income: Decimal
     ) -> Mapping[str, Decimal]:
-        """SDI is a payroll-side item — separate from income tax liability."""
+        """SDI is a payroll-side item — separate from income tax liability.
+        A missing `wage_base` means no wage ceiling (CA since 2024, SB 951)."""
         sdi = self.registry.extra("CA", inp.year, "sdi")
-        sdi_taxable_wages = min(inp.wages_w2, sdi["wage_base"])
-        sdi_tax = sdi_taxable_wages * sdi["rate"]
-        return {"sdi": sdi_tax}
+        return {"sdi": sdi_taxable_wages(inp.wages_w2, sdi) * sdi["rate"]}
 
     def compute_credits(
         self, inp: StateTaxInput, profile: TaxYearProfile, taxable_income: Decimal

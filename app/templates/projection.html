@@ -212,7 +212,7 @@
                     <label for="{{ prefix }}_input_type">Amounts entered</label>
                     <select id="{{ prefix }}_input_type" name="{{ prefix }}_input_type">
                         <option value="annual">Per year</option>
-                        <option value="per_period">Per paycheck (requires pay frequency)</option>
+                        <option value="per_period" disabled hidden>Per paycheck (requires pay frequency)</option>
                     </select>
                 </div>
             </div>
@@ -320,7 +320,7 @@
         <details class="refine ytd">
             <summary>Year-to-date paystub (refund or balance due)</summary>
             <div class="refine-body">
-                <div class="note">From your latest paystub. Requires pay frequency. Salary is assumed constant for the rest of the year.</div>
+                <div class="note">From your latest paystub. Requires pay frequency and YTD gross for each salary. Salary is assumed constant for the rest of the year.</div>
                 <h3>Salary 1</h3>
                 {{ ytd_salary_fields("ytd1") }}
                 <div id="ytd2Block" class="hidden">
@@ -363,6 +363,21 @@
             document.getElementById('pretax2Block').classList.toggle('hidden', !dualIncome.checked);
             document.getElementById('ytd2Block').classList.toggle('hidden', !dualIncome.checked);
         });
+
+        // "Per paycheck" pretax amounts need that salary's pay frequency.
+        function syncPerPaycheckOption(n) {
+            const hasFrequency = fieldValue(`salary${n}_frequency`) !== null;
+            const select = document.getElementById(`pretax${n}_input_type`);
+            const option = select.querySelector('option[value="per_period"]');
+            option.disabled = !hasFrequency;
+            option.hidden = !hasFrequency;
+            if (!hasFrequency && select.value === 'per_period') select.value = 'annual';
+        }
+        for (const n of [1, 2]) {
+            document.getElementById(`salary${n}_frequency`)
+                .addEventListener('change', () => syncPerPaycheckOption(n));
+            syncPerPaycheckOption(n);  // browsers may restore a selection on reload
+        }
 
         const PRETAX_FIELDS = ['_401k', 'ira', 'hsa', 'fsa', 'health_insurance', 'dental', 'vision', 'other'];
         const ITEMIZED_FIELDS = ['charitable', 'mortgage_interest', 'salt', 'medical', 'other'];
@@ -451,7 +466,7 @@
         }
 
         function ytdBalanceRow(label, b) {
-            const refund = Number(b.balance) >= 0;
+            const refund = Number(b.refund_or_balance_due) >= 0;
             return `<div class="row"><span>${label}: ${money(b.payments)} paid vs ${money(b.liability)} owed</span>`
                 + `<span>${refund ? 'Refund' : 'Balance due'} ${money(refund ? b.refund : b.balance_due)}</span></div>`;
         }
@@ -525,9 +540,9 @@
 
         // Marginal rates and take-home pay (#21)
         function displayTakeHome(r) {
-            const th = r.take_home;
-            const perPaycheck = th.per_paycheck !== null
-                ? `<div class="row"><span>Take-home per paycheck (${escapeHtml(th.periods_per_year)}/yr)</span><span>${money(th.per_paycheck)}</span></div>`
+            const takeHome = r.take_home;
+            const perPaycheck = takeHome.per_paycheck !== null
+                ? `<div class="row"><span>Take-home per paycheck (${escapeHtml(takeHome.periods_per_year)}/yr)</span><span>${money(takeHome.per_paycheck)}</span></div>`
                 : '';
             const tip = 'Statutory bracket rate on your next dollar of taxable income. '
                 + 'Ignores credit and deduction phase-outs.';
@@ -535,7 +550,7 @@
                 <div class="result-section">
                     <h2>Take-Home Pay</h2>
                     <div class="tax-summary">
-                        <div class="row total"><span>Take-home pay (annual)</span><span>${money(th.annual)}</span></div>
+                        <div class="row total"><span>Take-home pay (annual)</span><span>${money(takeHome.annual)}</span></div>
                         ${perPaycheck}
                         <div class="row"><span>Federal marginal rate <span class="info-tip" title="${tip}" aria-label="${tip}">&#9432;</span></span><span>${percent(r.marginal_rates.federal)}</span></div>
                         <div class="row"><span>State marginal rate</span><span>${percent(r.marginal_rates.state)}</span></div>

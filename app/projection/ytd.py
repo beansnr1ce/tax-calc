@@ -5,7 +5,7 @@ Self-contained so the projection engine only has to (1) parse the `ytd`
 payload, (2) swap projected wages into the facts and (3) settle the
 resulting liabilities against projected payments.
 
-Payload shape (all amounts optional, blank = 0)::
+Payload shape (amounts optional, blank = 0, except `gross`)::
 
     "ytd": {
         "salary1": {"gross", "federal_withheld", "state_withheld",
@@ -15,12 +15,14 @@ Payload shape (all amounts optional, blank = 0)::
         "federal_estimated_payments", "state_estimated_payments"
     }
 
+Once any YTD figure is entered, every salary in the household needs a pay
+frequency and a `salaryN` block with `gross`; otherwise projected wages and
+payments would silently fall back to the plain annual salary.
+
 Assumptions:
 - Salary is constant: each remaining paycheck = annual salary ÷ periods.
 - YTD figures include any paycheck dated on the as-of date, so the default
   paychecks remaining counts paydays strictly after it.
-- A salary without a `salaryN` block keeps its plain annual salary and
-  contributes no withholding.
 """
 
 from __future__ import annotations
@@ -28,11 +30,21 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass, replace
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Mapping
 
-from app.pay_periods import PAY_FREQUENCIES
-from app.tax_facts import FieldError, SalaryFacts, TaxFacts
+from app.state_tax.states.california import sdi_taxable_wages
+from app.tax_facts import (
+    FieldError,
+    SalaryFacts,
+    TaxFacts,
+    is_missing,
+    parse_decimal,
+    parse_whole_number,
+)
+
+if TYPE_CHECKING:
+    from .result import Liabilities
 
 _ZERO = Decimal("0")
 SALARY_AMOUNT_FIELDS = (
@@ -68,66 +80,73 @@ class YtdInput:
     state_estimated_payments: Decimal = _ZERO
 
 
-def parse_ytd(raw: Any) -> tuple[YtdInput | None, list[FieldError]]:
-    """Returns (None, []) when no YTD data was supplied (all blank)."""
+def parse_ytd(payload: Mapping[str, Any]) -> tuple[YtdInput | None, list[FieldError]]:
+    """Reads `payload["ytd"]` for the household's salaries. Returns (None, [])
+    when no YTD data was supplied (all blank)."""
+    raw = payload.get("ytd")
     if not isinstance(raw, Mapping):
         return None, []
+    keys = _salary_keys(payload)
     errors: list[FieldError] = []
-    salaries: dict[str, SalaryYtdInput | None] = {}
-    for key in ("salary1", "salary2"):
-        block = raw.get(key)
-        if not isinstance(block, Mapping) or all(_blank(block.get(f)) for f in (*SALARY_AMOUNT_FIELDS, "paychecks_remaining")):
-            salaries[key] = None
-            continue
-        amounts = {
-            f: _amount(block.get(f), f"ytd.{key}.{f}", errors) for f in SALARY_AMOUNT_FIELDS
-        }
-        salaries[key] = SalaryYtdInput(
-            **amounts,
-            paychecks_remaining=_count(
-                block.get("paychecks_remaining"), f"ytd.{key}.paychecks_remaining", errors
-            ),
-        )
+    salaries = {key: _salary_input(raw.get(key), f"ytd.{key}", errors) for key in keys}
     household = {f: _amount(raw.get(f), f"ytd.{f}", errors) for f in HOUSEHOLD_AMOUNT_FIELDS}
     if all(s is None for s in salaries.values()) and all(
-        _blank(raw.get(f)) for f in HOUSEHOLD_AMOUNT_FIELDS
+        is_missing(raw.get(f)) for f in HOUSEHOLD_AMOUNT_FIELDS
     ):
         return None, errors
+    errors += _required_once_present(payload, raw, keys)
     return YtdInput(**salaries, **household), errors
 
 
-def _blank(v: Any) -> bool:
-    return v is None or (isinstance(v, str) and v.strip() == "")
+def _salary_keys(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    return ("salary1", "salary2") if payload.get("dual_income") else ("salary1",)
 
 
-def _amount(v: Any, field: str, errors: list[FieldError]) -> Decimal:
-    if _blank(v):
-        return _ZERO
-    try:
-        d = Decimal(str(v))
-    except (InvalidOperation, ValueError):
-        errors.append(FieldError(field=field, code="type", message=f"{field} must be a number"))
-        return _ZERO
-    if not d.is_finite() or d < 0:
-        errors.append(FieldError(field=field, code="range", message=f"{field} must be ≥ 0"))
-        return _ZERO
-    return d
-
-
-def _count(v: Any, field: str, errors: list[FieldError]) -> int | None:
-    if _blank(v):
+def _salary_input(block: Any, prefix: str, errors: list[FieldError]) -> SalaryYtdInput | None:
+    if not isinstance(block, Mapping) or all(
+        is_missing(block.get(f)) for f in (*SALARY_AMOUNT_FIELDS, "paychecks_remaining")
+    ):
         return None
-    try:
-        d = Decimal(str(v))
-    except (InvalidOperation, ValueError):
-        d = None
-    if d is None or not d.is_finite() or d != d.to_integral_value():
-        errors.append(FieldError(field=field, code="type", message=f"{field} must be a whole number"))
-        return None
-    if d < 0:
-        errors.append(FieldError(field=field, code="range", message=f"{field} must be ≥ 0"))
-        return None
-    return int(d)
+    remaining = block.get("paychecks_remaining")
+    return SalaryYtdInput(
+        **{f: _amount(block.get(f), f"{prefix}.{f}", errors) for f in SALARY_AMOUNT_FIELDS},
+        paychecks_remaining=None
+        if is_missing(remaining)
+        else parse_whole_number(remaining, f"{prefix}.paychecks_remaining", errors),
+    )
+
+
+def _amount(value: Any, field: str, errors: list[FieldError]) -> Decimal:
+    if is_missing(value):
+        return _ZERO
+    parsed = parse_decimal(value, field, errors, non_negative=True)
+    return _ZERO if parsed is None else parsed
+
+
+def _required_once_present(
+    payload: Mapping[str, Any], raw: Mapping[str, Any], keys: tuple[str, ...]
+) -> list[FieldError]:
+    """Every salary needs a pay frequency and YTD gross once YTD data is present."""
+    errors: list[FieldError] = []
+    for key in keys:
+        if is_missing(payload.get(f"{key}_frequency")):
+            errors.append(
+                FieldError(
+                    field=f"{key}_frequency",
+                    code="frequency_required",
+                    message=f"{key}_frequency is required when YTD paystub data is entered",
+                )
+            )
+        block = raw.get(key)
+        if not isinstance(block, Mapping) or is_missing(block.get("gross")):
+            errors.append(
+                FieldError(
+                    field=f"ytd.{key}.gross",
+                    code="missing",
+                    message=f"ytd.{key}.gross (YTD gross wages) is required when YTD paystub data is entered",
+                )
+            )
+    return errors
 
 
 # --- paychecks remaining ----------------------------------------------------
@@ -175,6 +194,9 @@ class SalaryYtd:
     paychecks_remaining: int
     projected_wages: Decimal
     remaining_wages: Decimal = _ZERO
+    # Payroll-tax wages (gross less Section 125), the SDI wage basis
+    projected_payroll_wages: Decimal = _ZERO
+    remaining_payroll_wages: Decimal = _ZERO
     federal_payments: Decimal = _ZERO
     state_payments: Decimal = _ZERO
     sdi_payments: Decimal = _ZERO
@@ -186,17 +208,17 @@ class AuthorityBalance:
     payments: Decimal
 
     @property
-    def balance(self) -> Decimal:
-        """Positive = refund, negative = balance due."""
+    def refund_or_balance_due(self) -> Decimal:
+        """Payments − liability: positive = refund, negative = balance due."""
         return self.payments - self.liability
 
     @property
     def refund(self) -> Decimal:
-        return max(_ZERO, self.balance)
+        return max(_ZERO, self.refund_or_balance_due)
 
     @property
     def balance_due(self) -> Decimal:
-        return max(_ZERO, -self.balance)
+        return max(_ZERO, -self.refund_or_balance_due)
 
 
 @dataclass(frozen=True)
@@ -207,9 +229,9 @@ class YtdProjection:
     federal: AuthorityBalance  # income tax + SE tax; FICA excluded
     state: AuthorityBalance  # state income tax
     sdi: AuthorityBalance
-    # Suggested extra withholding per paycheck on `suggestion_salary`
-    # (W-4 Step 4(c) federal, DE 4 state). None when no balance is due or
-    # no paychecks remain.
+    # Suggested extra withholding per paycheck on `suggestion_salary`, the
+    # salary with the most paychecks remaining (W-4 Step 4(c) federal, DE 4
+    # state). None when no balance is due or no paychecks remain.
     suggestion_salary: str | None = None
     suggestion_paychecks: int = 0
     federal_extra_per_paycheck: Decimal | None = None
@@ -219,96 +241,75 @@ class YtdProjection:
 # --- engine-facing steps ----------------------------------------------------
 
 
-def frequency_errors(raw: Mapping[str, Any]) -> list[FieldError]:
-    """Pay frequency is required for every salary when YTD data is present."""
-    keys = ["salary1"] + (["salary2"] if raw.get("dual_income") else [])
-    return [
-        FieldError(
-            field=f"{k}_frequency",
-            code="frequency_required",
-            message=f"{k}_frequency is required when YTD paystub data is entered",
-        )
-        for k in keys
-        if _blank(raw.get(f"{k}_frequency"))
-    ]
-
-
 def project_salaries(
     facts: TaxFacts, ytd: YtdInput, as_of: date
 ) -> tuple[TaxFacts, dict[str, SalaryYtd]]:
     """Swap projected wages into the facts. Payments are filled in later by
-    `settle` (SDI needs the wage base)."""
+    `settle`."""
     projected: dict[str, SalaryYtd] = {}
     updates: dict[str, SalaryFacts] = {}
-    for key in ("salary1", "salary2"):
-        salary: SalaryFacts | None = getattr(facts, key)
-        if salary is None:
-            continue
-        block: SalaryYtdInput | None = getattr(ytd, key)
-        n = default_paychecks_remaining(salary.frequency, as_of, facts.tax_year)
-        if block is None:
-            projected[key] = SalaryYtd(paychecks_remaining=n, projected_wages=salary.annual)
-            continue
-        if block.paychecks_remaining is not None:
-            n = block.paychecks_remaining
-        remaining = n * _per_paycheck(salary)
-        wages = block.gross + remaining
+    for key, salary in zip(("salary1", "salary2"), facts.salaries):
+        block: SalaryYtdInput = getattr(ytd, key)
+        paychecks = block.paychecks_remaining
+        if paychecks is None:
+            paychecks = default_paychecks_remaining(salary.frequency, as_of, facts.tax_year)
+        remaining = paychecks * salary.per_paycheck(salary.annual)
+        projected_salary = replace(salary, annual=block.gross + remaining)
         projected[key] = SalaryYtd(
-            paychecks_remaining=n, projected_wages=wages, remaining_wages=remaining
+            paychecks_remaining=paychecks,
+            projected_wages=projected_salary.annual,
+            remaining_wages=remaining,
+            projected_payroll_wages=projected_salary.payroll_wages,
+            remaining_payroll_wages=paychecks * salary.per_paycheck(salary.payroll_wages),
         )
-        updates[key] = replace(salary, annual=wages)
+        updates[key] = projected_salary
     return replace(facts, **updates), projected
-
-
-def _per_paycheck(salary: SalaryFacts) -> Decimal:
-    return salary.annual / PAY_FREQUENCIES[salary.frequency]
 
 
 def settle(
     ytd: YtdInput,
     projected: Mapping[str, SalaryYtd],
+    liabilities: Liabilities,
     *,
-    federal_liability: Decimal,
-    state_liability: Decimal,
-    sdi_liability: Decimal,
     sdi_params: Mapping[str, Decimal] | None,
     as_of: date,
 ) -> YtdProjection:
     """Projected payments per authority vs. projected liability, plus the
-    extra-withholding suggestion when a balance is due."""
+    extra-withholding suggestion when a balance is due.
+
+    The federal liability is income tax + self-employment tax. Employee FICA
+    is left out: payroll withholds it exactly."""
     salaries: dict[str, SalaryYtd] = {}
     for key, s in projected.items():
-        block: SalaryYtdInput | None = getattr(ytd, key)
-        if block is None:
-            salaries[key] = s
-            continue
-        n = s.paychecks_remaining
+        block: SalaryYtdInput = getattr(ytd, key)
+        paychecks = s.paychecks_remaining
         salaries[key] = replace(
             s,
-            federal_payments=block.federal_withheld + n * block.federal_per_paycheck,
-            state_payments=block.state_withheld + n * block.state_per_paycheck,
-            sdi_payments=block.sdi_withheld + _remaining_sdi(block, s, sdi_params),
+            federal_payments=block.federal_withheld + paychecks * block.federal_per_paycheck,
+            state_payments=block.state_withheld + paychecks * block.state_per_paycheck,
+            sdi_payments=block.sdi_withheld + _remaining_sdi(s, sdi_params),
         )
 
     def total(attr: str) -> Decimal:
         return sum((getattr(s, attr) for s in salaries.values()), _ZERO)
 
     federal = AuthorityBalance(
-        federal_liability, total("federal_payments") + ytd.federal_estimated_payments
+        liabilities.federal_income_tax + liabilities.self_employment_tax,
+        total("federal_payments") + ytd.federal_estimated_payments,
     )
     state = AuthorityBalance(
-        state_liability, total("state_payments") + ytd.state_estimated_payments
+        liabilities.state_income_tax, total("state_payments") + ytd.state_estimated_payments
     )
-    sdi = AuthorityBalance(sdi_liability, total("sdi_payments"))
+    sdi = AuthorityBalance(liabilities.state_sdi, total("sdi_payments"))
 
     # Suggest on the salary with the most paychecks left (ties → salary1).
     target = max(salaries, key=lambda k: salaries[k].paychecks_remaining)
-    n = salaries[target].paychecks_remaining
+    paychecks = salaries[target].paychecks_remaining
 
     def extra(b: AuthorityBalance) -> Decimal | None:
-        return b.balance_due / n if n > 0 and b.balance_due > 0 else None
+        return b.balance_due / paychecks if paychecks > 0 and b.balance_due > 0 else None
 
-    fed_extra, state_extra = extra(federal), extra(state)
+    federal_extra, state_extra = extra(federal), extra(state)
     return YtdProjection(
         as_of=as_of,
         salary1=salaries["salary1"],
@@ -316,19 +317,21 @@ def settle(
         federal=federal,
         state=state,
         sdi=sdi,
-        suggestion_salary=target if (fed_extra or state_extra) else None,
-        suggestion_paychecks=n,
-        federal_extra_per_paycheck=fed_extra,
+        suggestion_salary=target if (federal_extra or state_extra) else None,
+        suggestion_paychecks=paychecks,
+        federal_extra_per_paycheck=federal_extra,
         state_extra_per_paycheck=state_extra,
     )
 
 
-def _remaining_sdi(
-    block: SalaryYtdInput, s: SalaryYtd, params: Mapping[str, Decimal] | None
-) -> Decimal:
-    """No per-paycheck SDI input: SDI rate × remaining wages, limited to the
-    part of the wage base YTD gross has not used up."""
+def _remaining_sdi(s: SalaryYtd, params: Mapping[str, Decimal] | None) -> Decimal:
+    """No per-paycheck SDI input: SDI rate × remaining payroll wages (the
+    same gross − Section 125 basis as the SDI liability). With a wage base,
+    only the part YTD wages have not used up counts."""
     if params is None:
         return _ZERO
-    room = max(_ZERO, params["wage_base"] - block.gross)
-    return min(s.remaining_wages, room) * params["rate"]
+    ytd_wages = max(_ZERO, s.projected_payroll_wages - s.remaining_payroll_wages)
+    remaining = sdi_taxable_wages(s.projected_payroll_wages, params) - sdi_taxable_wages(
+        ytd_wages, params
+    )
+    return remaining * params["rate"]

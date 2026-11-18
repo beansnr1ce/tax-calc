@@ -3,12 +3,9 @@
 Frozen dataclasses, Decimal amounts, unrounded. Serialization (rounding,
 JSON shape) happens at the HTTP route, not here.
 
-Extension points for later work:
-- New liability lines are added as fields on
-  `Liabilities`; `Liabilities.total` sums every field, so they count toward
-  `total_liability` and the effective rate automatically.
-- New result sections (marginal rates, take-home, YTD) are added as
-  defaulted fields on `ProjectionResult`.
+New liability lines are added as fields on `Liabilities`;
+`Liabilities.total` sums every field, so they count toward
+`total_liability` and the effective rate automatically.
 """
 
 from __future__ import annotations
@@ -42,20 +39,28 @@ class Liabilities:
 
 
 @dataclass(frozen=True)
+class SalaryFica:
+    """One salary's FICA wages and Social Security (capped at the wage base)."""
+
+    fica_wages: Decimal = _ZERO
+    social_security: Decimal = _ZERO
+
+
+@dataclass(frozen=True)
 class EmployeeFica:
     """Employee FICA breakdown. Social Security is per salary (each capped at
     the wage base); Additional Medicare is household-level (Form 8959)."""
 
-    salary1_fica_wages: Decimal = _ZERO
-    salary2_fica_wages: Decimal = _ZERO
-    salary1_social_security: Decimal = _ZERO
-    salary2_social_security: Decimal = _ZERO
+    salary1: SalaryFica = SalaryFica()
+    salary2: SalaryFica | None = None
     medicare: Decimal = _ZERO  # regular Medicare on all FICA wages
     additional_medicare: Decimal = _ZERO
 
     @property
     def social_security(self) -> Decimal:
-        return self.salary1_social_security + self.salary2_social_security
+        return self.salary1.social_security + (
+            self.salary2.social_security if self.salary2 else _ZERO
+        )
 
     @property
     def total_medicare(self) -> Decimal:
@@ -81,8 +86,9 @@ class TakeHome:
     W-2 gross − pretax deductions − federal income tax − state income tax
     − SDI − employee FICA. Self-employment tax is excluded (not paid from wages).
 
-    `per_paycheck` is annual ÷ salary 1's periods per year; None when no pay
-    frequency was given."""
+    `per_paycheck` is annual ÷ the household pay frequency's periods per
+    year: the frequency shared by every salary that has one. None when no
+    salary has a frequency or the salaries' frequencies differ."""
 
     annual: Decimal = _ZERO
     periods_per_year: int | None = None

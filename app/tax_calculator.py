@@ -19,6 +19,7 @@ from .federal_tax import FederalEngine, FederalResult
 from .projection import ProjectionEngine, ProjectionResult
 from .state_tax import StateEngineRegistry
 from .state_tax.states import register_overrides
+from .state_tax.states.california import sdi_taxable_wages
 from .tax_facts import TaxFacts, build_facts
 from .tax_registry import FilesystemSource, TaxTableRegistry
 
@@ -116,10 +117,9 @@ class TaxPipeline:
         if state_code == "CA":
             sdi_extra = self._tables.extra(state_code, year, "sdi")
             sdi_block["rate"] = float(sdi_extra["rate"]) * 100
-            sdi_block["wage_base"] = float(sdi_extra["wage_base"])
-            sdi_block["taxable_wages"] = min(
-                float(inp.wages_w2), float(sdi_extra["wage_base"])
-            )
+            wage_base = sdi_extra.get("wage_base")
+            sdi_block["wage_base"] = float(wage_base) if wage_base is not None else None
+            sdi_block["taxable_wages"] = float(sdi_taxable_wages(inp.wages_w2, sdi_extra))
 
         return {
             "agi": float(result.starting_income),

@@ -52,6 +52,19 @@ class SalaryFacts:
     annual: Decimal
     pretax: PretaxDeductions
 
+    @property
+    def payroll_wages(self) -> Decimal:
+        """Payroll-tax wages (FICA, SDI) = gross less Section 125 deductions.
+        401(k), IRA and `other` pretax deductions do not reduce them."""
+        return max(Decimal("0"), self.annual - self.pretax.section_125)
+
+    def per_paycheck(self, annual_amount: Decimal) -> Decimal | None:
+        """`annual_amount` spread evenly over this salary's paychecks; None
+        without a pay frequency."""
+        if not self.periods_per_year:
+            return None
+        return annual_amount / self.periods_per_year
+
 
 @dataclass(frozen=True)
 class ItemizedDeductions:
@@ -87,6 +100,11 @@ class TaxFacts:
     other_dependents: int = 0
     student_loan_interest: Decimal = Decimal("0")
     itemized: ItemizedDeductions = ItemizedDeductions()
+
+    @property
+    def salaries(self) -> tuple[SalaryFacts, ...]:
+        """Salary 1, plus salary 2 for a dual-income household."""
+        return (self.salary1,) if self.salary2 is None else (self.salary1, self.salary2)
 
     @property
     def dual_income(self) -> bool:

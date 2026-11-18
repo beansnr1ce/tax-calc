@@ -91,15 +91,15 @@ def test_quick_projection_mfj_dual_income_2026_ca(pipeline):
     #   1%×22,050=220.50  2%×30,223=604.46  4%×30,225=1,209  6%×32,028=1,921.68
     #   8%×30,216=2,417.28  9.3%×183,898=17,102.514 → 23,475.434 − 296 = 23,179.434
     assert result.liabilities.state_income_tax == Decimal("23179.434")
-    # SDI 2026 per employee: 150,000×1.1%=1,650 + min(190,000, 180,000)×1.1%=1,980
-    assert result.liabilities.state_sdi == Decimal("3630")
+    # SDI 2026 at 1.3%, no wage ceiling (SB 951): 150,000×1.3%=1,950 + 190,000×1.3%=2,470
+    assert result.liabilities.state_sdi == Decimal("4420")
     # FICA 2026: SS 150,000×6.2%=9,300 + 184,500 (capped)×6.2%=11,439 = 20,739
     #   Medicare 340,000×1.45%=4,930 + Additional (340,000−250,000)×0.9%=810 = 5,740
     assert result.liabilities.social_security == Decimal("20739")
     assert result.liabilities.medicare == Decimal("5740")
-    # 59,503 + 23,179.434 + 3,630 + 20,739 + 5,740 = 112,791.434; ÷ 340,000
-    assert result.total_liability == Decimal("112791.434")
-    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.331740")
+    # 59,503 + 23,179.434 + 4,420 + 20,739 + 5,740 = 113,581.434; ÷ 340,000
+    assert result.total_liability == Decimal("113581.434")
+    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.334063")
 
 
 def test_no_income_tax_state_has_no_state_lines(pipeline):
@@ -161,8 +161,8 @@ def test_social_security_is_capped_per_salary(pipeline):
     # 2026 SS wage base 184,500 @ 6.2%:
     #   salary1 150,000 (below cap) × 6.2% = 9,300
     #   salary2 190,000 → capped 184,500 × 6.2% = 11,439
-    assert result.fica.salary1_social_security == Decimal("9300")
-    assert result.fica.salary2_social_security == Decimal("11439")
+    assert result.fica.salary1.social_security == Decimal("9300")
+    assert result.fica.salary2.social_security == Decimal("11439")
     assert result.liabilities.social_security == Decimal("20739")
 
 
@@ -204,7 +204,7 @@ def test_section_125_reduces_fica_wages_but_401k_does_not(pipeline):
     )
     # FICA wages: 78,000 − (3,000 + 500 + 200 + 1,000 + 1,300) = 72,000
     #   401(k) and IRA are ignored.
-    assert result.fica.salary1_fica_wages == Decimal("72000")
+    assert result.fica.salary1.fica_wages == Decimal("72000")
     # SS 72,000 × 6.2% = 4,464; Medicare 72,000 × 1.45% = 1,044
     assert result.liabilities.social_security == Decimal("4464")
     assert result.liabilities.medicare == Decimal("1044")
@@ -339,7 +339,7 @@ def test_ytd_refund_for_federal_and_state(pipeline):
     # Federal: 7,000 + 6 × 350 = 9,100 paid vs 8,774 owed → 326 refund
     assert ytd.federal.liability == Decimal("8774.00")
     assert ytd.federal.payments == Decimal("9100")
-    assert ytd.federal.balance == Decimal("326")
+    assert ytd.federal.refund_or_balance_due == Decimal("326")
     assert ytd.federal.refund == Decimal("326")
     assert ytd.federal.balance_due == Decimal("0")
     # State: 2,500 + 6 × 120 = 3,220 paid vs 3,137.182 → 82.818 refund
@@ -355,7 +355,7 @@ def test_ytd_balance_due_suggests_extra_withholding_per_paycheck(pipeline):
     ytd = pipeline.project(_paystub(6000, 300, 2200, 100), as_of=AS_OF).ytd
 
     # Federal: 6,000 + 6 × 300 = 7,800 vs 8,774 → 974 due; 974 ÷ 6 per paycheck
-    assert ytd.federal.balance == Decimal("-974")
+    assert ytd.federal.refund_or_balance_due == Decimal("-974")
     assert ytd.federal.balance_due == Decimal("974")
     assert ytd.federal_extra_per_paycheck.quantize(Decimal("0.01")) == Decimal("162.33")
     # State: 2,200 + 6 × 100 = 2,800 vs 3,137.182 → 337.182 due; ÷ 6 = 56.197
@@ -385,10 +385,16 @@ def test_ytd_sdi_payments_project_rate_on_remaining_wages(pipeline):
     ytd = pipeline.project(_paystub(7000, 350, 2500, 120), as_of=AS_OF).ytd
     # 720 YTD + 1.2% × 18,000 remaining = 936 vs 936 liability
     assert ytd.sdi.payments == Decimal("936")
-    assert ytd.sdi.balance == Decimal("0")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
 
 
-def test_ytd_sdi_payments_stop_at_the_wage_base(pipeline):
+def test_ca_sdi_has_no_wage_ceiling(pipeline):
+    result = pipeline.project(_quick(salary1_annual=300000))
+    # SB 951: no SDI wage base since 2024. 300,000 × 1.2% = 3,600
+    assert result.liabilities.state_sdi == Decimal("3600")
+
+
+def test_ytd_sdi_payments_have_no_wage_ceiling(pipeline):
     ytd = pipeline.project(
         _quick(
             salary1_annual=260000,
@@ -397,10 +403,32 @@ def test_ytd_sdi_payments_stop_at_the_wage_base(pipeline):
         ),
         as_of=AS_OF,
     ).ytd
-    # Remaining 6 × 10,000 = 60,000, but only 174,668 − 170,000 = 4,668 is under
-    # the base: 2,040 + 1.2% × 4,668 = 2,096.016 = 1.2% × 174,668 liability
-    assert ytd.sdi.payments == Decimal("2096.016")
-    assert ytd.sdi.balance == Decimal("0")
+    # Remaining 6 × 10,000 = 60,000, all subject to SDI:
+    #   2,040 + 1.2% × 60,000 = 2,760 = 1.2% × 230,000 projected wages
+    assert ytd.sdi.payments == Decimal("2760")
+    assert ytd.sdi.liability == Decimal("2760")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
+
+
+def test_ytd_remaining_sdi_uses_wages_less_section_125(pipeline):
+    ytd = pipeline.project(
+        _ytd(
+            pretax_deductions_1={"health_insurance": 100},  # per paycheck, 2,600/yr
+            ytd={
+                "salary1": {
+                    "gross": 60000,
+                    "sdi_withheld": 696,  # (60,000 − 20 × 100) × 1.2%
+                    "paychecks_remaining": 6,
+                }
+            },
+        ),
+        as_of=AS_OF,
+    ).ytd
+    # Liability: (78,000 − 2,600) × 1.2% = 904.80
+    # Payments: 696 + 6 × (3,000 − 100) × 1.2% = 696 + 208.80 = 904.80
+    assert ytd.sdi.liability == Decimal("904.8")
+    assert ytd.sdi.payments == Decimal("904.8")
+    assert ytd.sdi.refund_or_balance_due == Decimal("0")
 
 
 def test_ytd_refund_or_owe_excludes_fica_but_includes_se_tax(pipeline):
@@ -412,7 +440,7 @@ def test_ytd_refund_or_owe_excludes_fica_but_includes_se_tax(pipeline):
     # Income tax: 8,774 + 22% × 9,293.5225 = 10,818.57495
     # Federal liability: 10,818.57495 + 1,412.955 = 12,231.52995 (no SS/Medicare)
     assert result.ytd.federal.liability == Decimal("12231.52995")
-    assert result.ytd.federal.balance == Decimal("-3131.52995")  # 9,100 paid
+    assert result.ytd.federal.refund_or_balance_due == Decimal("-3131.52995")  # 9,100 paid
     assert result.liabilities.social_security > 0  # FICA is still a liability line
 
 
@@ -564,8 +592,8 @@ def test_annual_take_home_single(pipeline):
 
 def test_annual_take_home_mfj(pipeline):
     result = pipeline.project(_mfj_2026())
-    # 340,000 − 59,503 − 23,179.434 − 3,630 − 20,739 − 5,740 = 227,208.566
-    assert result.take_home.annual == Decimal("227208.566")
+    # 340,000 − 59,503 − 23,179.434 − 4,420 − 20,739 − 5,740 = 226,418.566
+    assert result.take_home.annual == Decimal("226418.566")
 
 
 def test_annual_take_home_subtracts_pretax_deductions(pipeline):
@@ -595,3 +623,44 @@ def test_per_paycheck_take_home_absent_without_frequency(pipeline):
     result = pipeline.project(_quick())
     assert result.take_home.per_paycheck is None
     assert result.take_home.periods_per_year is None
+
+
+def test_per_paycheck_take_home_uses_salary2_frequency_when_salary1_has_none(pipeline):
+    result = pipeline.project(_mfj_2026(salary2_frequency="biweekly"))
+    # 226,418.566 ÷ 26 = 8,708.4064 (household frequency is salary2's)
+    assert result.take_home.periods_per_year == 26
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("8708.41")
+
+
+def test_per_paycheck_take_home_uses_shared_household_frequency(pipeline):
+    result = pipeline.project(_mfj_2026(salary1_frequency="monthly", salary2_frequency="monthly"))
+    # 226,418.566 ÷ 12 = 18,868.2138
+    assert result.take_home.periods_per_year == 12
+    assert result.take_home.per_paycheck.quantize(Decimal("0.01")) == Decimal("18868.21")
+
+
+def test_per_paycheck_take_home_absent_when_frequencies_differ(pipeline):
+    result = pipeline.project(_mfj_2026(salary1_frequency="monthly", salary2_frequency="biweekly"))
+    assert result.take_home.periods_per_year is None
+    assert result.take_home.per_paycheck is None
+    assert result.take_home.annual == Decimal("226418.566")
+
+
+def test_ytd_salary_block_without_gross_is_a_validation_error(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(_ytd(ytd={"salary1": {"federal_withheld": 6000}}), as_of=AS_OF)
+    assert any(e.field == "ytd.salary1.gross" and e.code == "missing" for e in exc.value.errors)
+
+
+def test_dual_income_ytd_requires_a_salary2_block(pipeline):
+    with pytest.raises(FactsError) as exc:
+        pipeline.project(
+            _ytd(
+                dual_income=True,
+                salary2_annual=24000,
+                salary2_frequency="monthly",
+                ytd={"salary1": {"gross": 60000}},
+            ),
+            as_of=AS_OF,
+        )
+    assert any(e.field == "ytd.salary2.gross" and e.code == "missing" for e in exc.value.errors)
