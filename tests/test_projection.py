@@ -131,3 +131,74 @@ def test_per_paycheck_deductions_without_frequency_are_rejected(pipeline):
         pipeline.project(_quick(pretax_deductions_1={"_401k": 500}))
     codes = {e.code for e in exc_info.value.errors}
     assert "frequency_required" in codes
+
+
+# --- Refinement inputs (#20) -------------------------------------------------
+
+
+def test_per_paycheck_pretax_with_frequency_annualizes(pipeline):
+    result = pipeline.project(
+        _quick(salary1_frequency="biweekly", pretax_deductions_1={"_401k": 500})
+    )
+    # 401(k): 500 × 26 = 13,000. Federal: 78,000 − 13,000 − 15,000 = 50,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×1,525 = 335.50 → 5,914.00
+    assert result.liabilities.federal_income_tax == Decimal("5914.00")
+    # 401(k) does not reduce SDI wages: 78,000 × 1.2% = 936
+    assert result.liabilities.state_sdi == Decimal("936")
+
+
+def test_1099_nec_income_adds_self_employment_tax_line(pipeline):
+    result = pipeline.project(_quick(income_1099nec=20000))
+
+    assert result.gross_income == Decimal("98000")
+    # SE income 20,000 × 0.9235 = 18,470
+    #   SS 12.4% = 2,290.28; Medicare 2.9% = 535.63 → 2,825.91
+    assert result.liabilities.self_employment_tax == Decimal("2825.91")
+    # AGI 98,000 − ½SE 1,412.955 = 96,587.045; − 15,000 std = 81,587.045 taxable
+    #   1,192.50 + 4,386.00 + 22%×33,112.045 = 7,284.6499 → 12,863.1499
+    assert result.liabilities.federal_income_tax == Decimal("12863.1499")
+    # CA from federal AGI: 96,587.045 − 5,540 = 91,047.045 taxable
+    #   3,108.76 through 8% + 9.3%×20,441.045 = 1,901.017185 → 5,009.777185 − 144
+    assert result.liabilities.state_income_tax == Decimal("4865.777185")
+    # SDI applies to W-2 wages only: 78,000 × 1.2% = 936
+    assert result.liabilities.state_sdi == Decimal("936")
+    # 12,863.1499 + 2,825.91 + 4,865.777185 + 936
+    assert result.total_liability == Decimal("21490.837085")
+
+
+def test_children_reduce_federal_and_state_tax_through_credits(pipeline):
+    result = pipeline.project(_quick(children_under_17=2))
+    # Federal CTC 2 × 2,000 = 4,000: 8,774 − 4,000 = 4,774
+    assert result.liabilities.federal_income_tax == Decimal("4774.00")
+    # CA dependent credit 2 × 446 = 892: 3,137.182 − 892 = 2,245.182
+    assert result.liabilities.state_income_tax == Decimal("2245.182")
+
+
+def test_itemized_deductions_above_standard_are_used(pipeline):
+    result = pipeline.project(
+        _quick(itemized_deductions={"mortgage_interest": 20000, "charitable": 5000})
+    )
+    # Itemized 25,000 > 15,000 std: 78,000 − 25,000 = 53,000 taxable
+    #   1,192.50 + 4,386.00 + 22%×4,525 = 995.50 → 6,574.00
+    assert result.liabilities.federal_income_tax == Decimal("6574.00")
+
+
+def test_itemized_deductions_below_standard_fall_back_to_standard(pipeline):
+    result = pipeline.project(_quick(itemized_deductions={"charitable": 5000}))
+    assert result.liabilities.federal_income_tax == Decimal("8774.00")
+
+
+def test_student_loan_interest_reduces_federal_tax(pipeline):
+    result = pipeline.project(_quick(student_loan_interest=2000))
+    # AGI 76,000 − 15,000 = 61,000 taxable: 8,774 − 22%×2,000 = 8,334
+    assert result.liabilities.federal_income_tax == Decimal("8334.00")
+
+
+def test_other_1099_income_is_taxed_without_self_employment_tax(pipeline):
+    result = pipeline.project(
+        _quick(income_1099g=1000, income_1099int_div=500, other_income=500)
+    )
+    assert result.gross_income == Decimal("80000")
+    assert result.liabilities.self_employment_tax == Decimal("0")
+    # 65,000 taxable: 8,774 + 22%×2,000 = 9,214
+    assert result.liabilities.federal_income_tax == Decimal("9214.00")

@@ -105,6 +105,21 @@
             margin-bottom: 15px;
         }
         .error ul { margin: 5px 0 0 0; padding-left: 20px; }
+        details.refine {
+            background: white;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        details.refine > summary {
+            cursor: pointer;
+            padding: 15px 20px;
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        details.refine > .refine-body { padding: 0 20px 5px; }
+        details.refine h3 { font-size: 1em; margin: 5px 0 10px; }
+        .refine-heading { color: #666; font-size: 0.9em; margin: 0 0 10px; }
         @media (max-width: 600px) { .form-group { min-width: 100%; } }
     </style>
 </head>
@@ -165,6 +180,124 @@
             </div>
         </div>
 
+        {% macro money_input(name, label, note=None) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <input type="number" id="{{ name }}" name="{{ name }}" min="0" step="0.01" placeholder="0">
+                    {% if note %}<div class="note">{{ note }}</div>{% endif %}
+                </div>
+        {% endmacro %}
+        {% macro count_input(name, label) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <input type="number" id="{{ name }}" name="{{ name }}" min="0" step="1" placeholder="0">
+                </div>
+        {% endmacro %}
+        {% macro frequency_select(name, label) %}
+                <div class="form-group">
+                    <label for="{{ name }}">{{ label }}</label>
+                    <select id="{{ name }}" name="{{ name }}">
+                        <option value="">Not specified</option>
+                        <option value="weekly">Weekly (52)</option>
+                        <option value="biweekly">Biweekly (26)</option>
+                        <option value="semimonthly">Semi-monthly (24)</option>
+                        <option value="monthly">Monthly (12)</option>
+                    </select>
+                </div>
+        {% endmacro %}
+        {% macro pretax_fields(prefix) %}
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="{{ prefix }}_input_type">Amounts entered</label>
+                    <select id="{{ prefix }}_input_type" name="{{ prefix }}_input_type">
+                        <option value="annual">Per year</option>
+                        <option value="per_period">Per paycheck (requires pay frequency)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "__401k", "401(k)") }}
+                {{ money_input(prefix ~ "_ira", "IRA") }}
+                {{ money_input(prefix ~ "_hsa", "HSA") }}
+                {{ money_input(prefix ~ "_fsa", "FSA") }}
+            </div>
+            <div class="form-row">
+                {{ money_input(prefix ~ "_health_insurance", "Health insurance") }}
+                {{ money_input(prefix ~ "_dental", "Dental") }}
+                {{ money_input(prefix ~ "_vision", "Vision") }}
+                {{ money_input(prefix ~ "_other", "Other") }}
+            </div>
+        {% endmacro %}
+
+        <p class="refine-heading">Optional: refine your projection.</p>
+
+        <details class="refine">
+            <summary>Pay frequency</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ frequency_select("salary1_frequency", "Salary 1 pay frequency") }}
+                    {{ frequency_select("salary2_frequency", "Salary 2 pay frequency") }}
+                </div>
+                <div class="note">Needed only if you enter pretax deductions per paycheck.</div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Pretax deductions</summary>
+            <div class="refine-body">
+                <h3>Salary 1</h3>
+                {{ pretax_fields("pretax1") }}
+                <div id="pretax2Block" class="hidden">
+                    <h3>Salary 2</h3>
+                    {{ pretax_fields("pretax2") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Other income (1099s)</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ money_input("income_1099nec", "1099-NEC / MISC", "Self-employment income; adds self-employment tax.") }}
+                    {{ money_input("income_1099g", "1099-G") }}
+                </div>
+                <div class="form-row">
+                    {{ money_input("income_1099int_div", "1099-INT / DIV") }}
+                    {{ money_input("other_income", "Other income") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Dependents</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ count_input("children_under_17", "Children under 17") }}
+                    {{ count_input("other_dependents", "Other dependents") }}
+                </div>
+            </div>
+        </details>
+
+        <details class="refine">
+            <summary>Deductions</summary>
+            <div class="refine-body">
+                <div class="form-row">
+                    {{ money_input("student_loan_interest", "Student loan interest") }}
+                </div>
+                <h3>Itemized deductions</h3>
+                <div class="form-row">
+                    {{ money_input("itemized_charitable", "Charitable") }}
+                    {{ money_input("itemized_mortgage_interest", "Mortgage interest") }}
+                    {{ money_input("itemized_salt", "State & local taxes (SALT)") }}
+                </div>
+                <div class="form-row">
+                    {{ money_input("itemized_medical", "Medical") }}
+                    {{ money_input("itemized_other", "Other") }}
+                </div>
+                <div class="note">Standard vs. itemized is chosen automatically, whichever is larger.</div>
+            </div>
+        </details>
+
         <button type="submit" id="submitBtn">Project My Taxes</button>
     </form>
 
@@ -183,7 +316,50 @@
         const dualIncome = document.getElementById('dual_income');
         dualIncome.addEventListener('change', () => {
             document.getElementById('salary2Row').classList.toggle('hidden', !dualIncome.checked);
+            document.getElementById('pretax2Block').classList.toggle('hidden', !dualIncome.checked);
         });
+
+        const PRETAX_FIELDS = ['_401k', 'ira', 'hsa', 'fsa', 'health_insurance', 'dental', 'vision', 'other'];
+        const ITEMIZED_FIELDS = ['charitable', 'mortgage_interest', 'salt', 'medical', 'other'];
+        const OPTIONAL_AMOUNTS = [
+            'income_1099g', 'income_1099nec', 'income_1099int_div', 'other_income',
+            'student_loan_interest', 'children_under_17', 'other_dependents',
+        ];
+
+        function fieldValue(id) {
+            const el = document.getElementById(id);
+            return el && el.value !== '' ? el.value : null;
+        }
+
+        // Collects `<prefix><field>` inputs into an object; null when all are blank.
+        function collectGroup(prefix, fields) {
+            const group = {};
+            for (const f of fields) {
+                const v = fieldValue(prefix + f);
+                if (v !== null) group[f] = v;
+            }
+            return Object.keys(group).length ? group : null;
+        }
+
+        function addRefinements(payload) {
+            const freq1 = fieldValue('salary1_frequency');
+            if (freq1) payload.salary1_frequency = freq1;
+            for (const key of OPTIONAL_AMOUNTS) {
+                const v = fieldValue(key);
+                if (v !== null) payload[key] = v;
+            }
+            const pretax1 = collectGroup('pretax1_', PRETAX_FIELDS);
+            if (pretax1) payload.pretax_deductions_1 = { input_type: fieldValue('pretax1_input_type'), ...pretax1 };
+            if (payload.dual_income) {
+                const freq2 = fieldValue('salary2_frequency');
+                if (freq2) payload.salary2_frequency = freq2;
+                const pretax2 = collectGroup('pretax2_', PRETAX_FIELDS);
+                if (pretax2) payload.pretax_deductions_2 = { input_type: fieldValue('pretax2_input_type'), ...pretax2 };
+            }
+            const itemized = collectGroup('itemized_', ITEMIZED_FIELDS);
+            if (itemized) payload.itemized_deductions = itemized;
+            return payload;
+        }
 
         function money(s) {
             return Number(s).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -206,7 +382,7 @@
                 payload.dual_income = true;
                 payload.salary2_annual = document.getElementById('salary2_annual').value;
             }
-            return payload;
+            return addRefinements(payload);
         }
 
         function displayErrors(body) {
