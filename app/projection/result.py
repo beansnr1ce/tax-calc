@@ -67,6 +67,29 @@ class EmployeeFica:
 
 
 @dataclass(frozen=True)
+class MarginalRates:
+    """Statutory (bracket) rates on the next dollar of taxable income.
+    Not "true" marginal rates: phase-outs, credits and surcharges are ignored."""
+
+    federal: Decimal = _ZERO
+    state: Decimal = _ZERO  # 0 for no-income-tax states
+
+
+@dataclass(frozen=True)
+class TakeHome:
+    """Household take-home pay from wages:
+    W-2 gross − pretax deductions − federal income tax − state income tax
+    − SDI − employee FICA. Self-employment tax is excluded (not paid from wages).
+
+    `per_paycheck` is annual ÷ salary 1's periods per year; None when no pay
+    frequency was given."""
+
+    annual: Decimal = _ZERO
+    periods_per_year: int | None = None
+    per_paycheck: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class ProjectionResult:
     tax_year: int
     filing_status: str
@@ -77,6 +100,8 @@ class ProjectionResult:
     fica: EmployeeFica = EmployeeFica()
     # YTD / paystub projection (#22); None unless YTD data was supplied.
     ytd: YtdProjection | None = None
+    marginal_rates: MarginalRates = MarginalRates()
+    take_home: TakeHome = TakeHome()
 
     @property
     def total_liability(self) -> Decimal:

@@ -192,3 +192,24 @@ def test_projection_page_has_collapsed_ytd_panel(client):
         assert f'name="{name}"' in html, name
     assert "W-4 Step 4(c)" in html
     assert "DE 4" in html
+
+def test_project_response_includes_marginal_rates_and_take_home(client):
+    body = client.post("/project", json=_payload()).get_json()
+    assert body["marginal_rates"] == {"federal": "0.2200", "state": "0.0930"}
+    assert body["take_home"]["annual"] == "59185.82"
+    assert body["take_home"]["per_paycheck"] is None
+    assert body["take_home"]["periods_per_year"] is None
+
+
+def test_project_response_includes_per_paycheck_take_home_with_frequency(client):
+    body = client.post("/project", json=_payload(salary1_frequency="biweekly")).get_json()
+    assert body["take_home"]["periods_per_year"] == 26
+    assert body["take_home"]["per_paycheck"] == "2276.38"
+
+
+def test_projection_page_renders_marginal_rates_and_take_home(client):
+    html = client.get("/projection").get_data(as_text=True)
+    assert "Federal marginal rate" in html
+    assert "State marginal rate" in html
+    assert "Take-home pay (annual)" in html
+    assert "Take-home per paycheck" in html

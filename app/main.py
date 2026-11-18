@@ -70,7 +70,24 @@ def _serialize_projection(result: ProjectionResult) -> dict:
         "fica": {f.name: _money(getattr(result.fica, f.name)) for f in fields(result.fica)},
         "total_liability": _money(result.total_liability),
         "effective_rate": _rate(result.effective_rate),
+        **_serialize_take_home(result),
         "ytd": _serialize_ytd(result.ytd),
+    }
+
+
+def _serialize_take_home(result: ProjectionResult) -> dict:
+    """Marginal rates and take-home pay (#21)."""
+    th = result.take_home
+    return {
+        "marginal_rates": {
+            "federal": _rate(result.marginal_rates.federal),
+            "state": _rate(result.marginal_rates.state),
+        },
+        "take_home": {
+            "annual": _money(th.annual),
+            "periods_per_year": th.periods_per_year,
+            "per_paycheck": _money(th.per_paycheck) if th.per_paycheck is not None else None,
+        },
     }
 
 
