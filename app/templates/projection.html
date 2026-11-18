@@ -90,6 +90,7 @@
             border-bottom: 1px solid #eee;
         }
         .tax-summary .row:last-child { border-bottom: none; }
+        .info-tip { cursor: help; color: #667eea; }
         .tax-summary .row.total {
             font-weight: bold;
             font-size: 1.2em;
@@ -180,6 +181,13 @@
             medicare: 'Medicare (incl. Additional Medicare)',
         };
 
+        const LIABILITY_TIPS = {
+            medicare: 'Additional Medicare (0.9%) is projected on combined household wages above your '
+                + 'filing-status threshold ($250,000 married filing jointly, $200,000 single/head of household). '
+                + 'Employers withhold it once your wages pass $200,000 per employer, regardless of filing status, '
+                + 'so your paystubs may differ from this projection.',
+        };
+
         const dualIncome = document.getElementById('dual_income');
         dualIncome.addEventListener('change', () => {
             document.getElementById('salary2Row').classList.toggle('hidden', !dualIncome.checked);
@@ -218,8 +226,13 @@
         function displayResults(r) {
             const rows = Object.entries(r.liabilities)
                 .filter(([key, value]) => Number(value) !== 0 || key === 'federal_income_tax' || key === 'state_income_tax')
-                .map(([key, value]) => `
-                    <div class="row"><span>${escapeHtml(LIABILITY_LABELS[key] || key)}</span><span>${money(value)}</span></div>`)
+                .map(([key, value]) => {
+                    const tip = LIABILITY_TIPS[key];
+                    const label = escapeHtml(LIABILITY_LABELS[key] || key)
+                        + (tip ? ` <span class="info-tip" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">&#9432;</span>` : '');
+                    return `
+                    <div class="row"><span>${label}</span><span>${money(value)}</span></div>`;
+                })
                 .join('');
             return `
                 <div class="result-section">

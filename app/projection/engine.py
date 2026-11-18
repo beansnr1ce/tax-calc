@@ -14,7 +14,7 @@ from app.state_tax import StateEngineRegistry
 from app.tax_facts import FactsError, FieldError, SalaryFacts, TaxFacts, build_facts
 from app.tax_registry import TaxTableRegistry
 
-from .result import Liabilities, ProjectionResult
+from .result import EmployeeFica, Liabilities, ProjectionResult
 
 _ZERO = Decimal("0")
 
@@ -43,6 +43,8 @@ class ProjectionEngine:
             )
         )
 
+        fica = self._fica(facts)
+
         return ProjectionResult(
             tax_year=facts.tax_year,
             filing_status=facts.filing_status,
@@ -54,7 +56,10 @@ class ProjectionEngine:
                 self_employment_tax=fed.se_tax.total,
                 state_income_tax=state_result.final_tax,
                 state_sdi=self._sdi(facts),
+                social_security=fica.social_security,
+                medicare=fica.total_medicare,
             ),
+            fica=fica,
         )
 
     def _build_facts(self, raw: Mapping[str, Any]) -> TaxFacts:
@@ -76,6 +81,27 @@ class ProjectionEngine:
             raise FactsError(errors)
         return facts
 
+    def _fica(self, facts: TaxFacts) -> EmployeeFica:
+        """Employee FICA from the federal `extras.fica` table. Social Security
+        per salary, capped at the wage base; Medicare on all FICA wages;
+        Additional Medicare on combined household FICA wages above the
+        filing-status threshold."""
+        p = self._tables.extra("federal", facts.tax_year, "fica")
+        w1 = _payroll_wages(facts.salary1)
+        w2 = _payroll_wages(facts.salary2) if facts.salary2 is not None else _ZERO
+        ss_base = p["ss_wage_base"]
+        threshold = p["additional_medicare_threshold"][facts.filing_status]
+        household = w1 + w2
+        return EmployeeFica(
+            salary1_fica_wages=w1,
+            salary2_fica_wages=w2,
+            salary1_social_security=min(w1, ss_base) * p["ss_rate"],
+            salary2_social_security=min(w2, ss_base) * p["ss_rate"],
+            medicare=household * p["medicare_rate"],
+            additional_medicare=max(_ZERO, household - threshold)
+            * p["additional_medicare_rate"],
+        )
+
     def _sdi(self, facts: TaxFacts) -> Decimal:
         """State disability insurance, per employee: each salary's SDI wages
         are capped at the wage base separately (unlike the household-combined
@@ -85,7 +111,7 @@ class ProjectionEngine:
             return _ZERO
         salaries = [s for s in (facts.salary1, facts.salary2) if s is not None]
         return sum(
-            (min(_sdi_wages(s), params["wage_base"]) * params["rate"] for s in salaries),
+            (min(_payroll_wages(s), params["wage_base"]) * params["rate"] for s in salaries),
             _ZERO,
         )
 
@@ -98,7 +124,7 @@ class ProjectionEngine:
             return None
 
 
-def _sdi_wages(salary: SalaryFacts) -> Decimal:
-    """SDI wages = gross less Section 125 (cafeteria plan) deductions.
-    401(k), IRA and `other` pretax deductions do not reduce SDI wages."""
+def _payroll_wages(salary: SalaryFacts) -> Decimal:
+    """Payroll-tax wages (FICA, SDI) = gross less Section 125 (cafeteria plan)
+    deductions. 401(k), IRA and `other` pretax deductions do not reduce them."""
     return max(_ZERO, salary.annual - salary.pretax.section_125)

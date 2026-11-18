@@ -62,9 +62,12 @@ def test_quick_projection_single_2025_ca(pipeline):
     assert result.liabilities.state_income_tax == Decimal("3137.182")
     # SDI 2025: 78,000 × 1.2% = 936
     assert result.liabilities.state_sdi == Decimal("936")
-    # Total 8,774 + 3,137.182 + 936 = 12,847.182; ÷ 78,000
-    assert result.total_liability == Decimal("12847.182")
-    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.164707")
+    # FICA 2025: SS 78,000 × 6.2% = 4,836; Medicare 78,000 × 1.45% = 1,131
+    assert result.liabilities.social_security == Decimal("4836")
+    assert result.liabilities.medicare == Decimal("1131")
+    # Total 8,774 + 3,137.182 + 936 + 4,836 + 1,131 = 18,814.182; ÷ 78,000
+    assert result.total_liability == Decimal("18814.182")
+    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.241207")
 
 
 def test_quick_projection_mfj_dual_income_2026_ca(pipeline):
@@ -89,16 +92,21 @@ def test_quick_projection_mfj_dual_income_2026_ca(pipeline):
     assert result.liabilities.state_income_tax == Decimal("23179.434")
     # SDI 2026 per employee: 150,000×1.1%=1,650 + min(190,000, 180,000)×1.1%=1,980
     assert result.liabilities.state_sdi == Decimal("3630")
-    # 59,503 + 23,179.434 + 3,630 = 86,312.434; ÷ 340,000 = 0.2538601
-    assert result.total_liability == Decimal("86312.434")
-    assert result.effective_rate == Decimal("0.2538601")
+    # FICA 2026: SS 150,000×6.2%=9,300 + 184,500 (capped)×6.2%=11,439 = 20,739
+    #   Medicare 340,000×1.45%=4,930 + Additional (340,000−250,000)×0.9%=810 = 5,740
+    assert result.liabilities.social_security == Decimal("20739")
+    assert result.liabilities.medicare == Decimal("5740")
+    # 59,503 + 23,179.434 + 3,630 + 20,739 + 5,740 = 112,791.434; ÷ 340,000
+    assert result.total_liability == Decimal("112791.434")
+    assert result.effective_rate.quantize(Decimal("0.000001")) == Decimal("0.331740")
 
 
 def test_no_income_tax_state_has_no_state_lines(pipeline):
     result = pipeline.project(_quick(state="TX"))
     assert result.liabilities.state_income_tax == Decimal("0")
     assert result.liabilities.state_sdi == Decimal("0")
-    assert result.total_liability == Decimal("8774.00")
+    # 8,774 federal + 4,836 SS + 1,131 Medicare
+    assert result.total_liability == Decimal("14741.00")
 
 
 def test_section_125_deductions_reduce_sdi_wages_but_401k_does_not(pipeline):
@@ -131,3 +139,80 @@ def test_per_paycheck_deductions_without_frequency_are_rejected(pipeline):
         pipeline.project(_quick(pretax_deductions_1={"_401k": 500}))
     codes = {e.code for e in exc_info.value.errors}
     assert "frequency_required" in codes
+
+
+# --- Employee FICA (#19) ---------------------------------------------------
+
+
+def _mfj_2026(**overrides):
+    return _quick(
+        tax_year=2026,
+        filing_status="married_jointly",
+        salary1_annual=150000,
+        dual_income=True,
+        salary2_annual=190000,
+        **overrides,
+    )
+
+
+def test_social_security_is_capped_per_salary(pipeline):
+    result = pipeline.project(_mfj_2026())
+    # 2026 SS wage base 184,500 @ 6.2%:
+    #   salary1 150,000 (below cap) × 6.2% = 9,300
+    #   salary2 190,000 → capped 184,500 × 6.2% = 11,439
+    assert result.fica.salary1_social_security == Decimal("9300")
+    assert result.fica.salary2_social_security == Decimal("11439")
+    assert result.liabilities.social_security == Decimal("20739")
+
+
+def test_additional_medicare_uses_household_threshold_by_filing_status(pipeline):
+    single = pipeline.project(_quick(salary1_annual=260000))
+    # Single threshold 200,000: (260,000 − 200,000) × 0.9% = 540
+    #   regular 260,000 × 1.45% = 3,770 → Medicare line 4,310
+    assert single.fica.additional_medicare == Decimal("540")
+    assert single.liabilities.medicare == Decimal("4310")
+
+    mfj = pipeline.project(
+        _quick(
+            filing_status="married_jointly",
+            salary1_annual=130000,
+            dual_income=True,
+            salary2_annual=130000,
+        )
+    )
+    # MFJ threshold 250,000 on combined wages: (260,000 − 250,000) × 0.9% = 90
+    #   (neither spouse alone is over 200,000)
+    assert mfj.fica.additional_medicare == Decimal("90")
+    assert mfj.liabilities.medicare == Decimal("3860")
+
+
+def test_section_125_reduces_fica_wages_but_401k_does_not(pipeline):
+    result = pipeline.project(
+        _quick(
+            pretax_deductions_1={
+                "input_type": "annual",
+                "_401k": 10000,
+                "ira": 2000,
+                "health_insurance": 3000,
+                "dental": 500,
+                "vision": 200,
+                "fsa": 1000,
+                "hsa": 1300,
+            }
+        )
+    )
+    # FICA wages: 78,000 − (3,000 + 500 + 200 + 1,000 + 1,300) = 72,000
+    #   401(k) and IRA are ignored.
+    assert result.fica.salary1_fica_wages == Decimal("72000")
+    # SS 72,000 × 6.2% = 4,464; Medicare 72,000 × 1.45% = 1,044
+    assert result.liabilities.social_security == Decimal("4464")
+    assert result.liabilities.medicare == Decimal("1044")
+
+
+def test_social_security_wage_base_comes_from_the_year_table(pipeline):
+    y2025 = pipeline.project(_quick(salary1_annual=180000, state="TX"))
+    y2026 = pipeline.project(_quick(tax_year=2026, salary1_annual=180000, state="TX"))
+    # 2025 base 176,100 × 6.2% = 10,918.20 (capped)
+    assert y2025.liabilities.social_security == Decimal("10918.2")
+    # 2026 base 184,500 > 180,000 → 180,000 × 6.2% = 11,160 (uncapped)
+    assert y2026.liabilities.social_security == Decimal("11160")

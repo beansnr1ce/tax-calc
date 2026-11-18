@@ -41,7 +41,7 @@ limits:
   "hsa_self_only":              "4400"
   "hsa_family":                 "8750"
   "salt_cap":                   "10000"
-  "se_tax_ss_wage_base":        "181200"
+  "se_tax_ss_wage_base":        "184500"
   "se_tax_rate":                "0.153"
   "student_loan_max_deduction": "2500"
 quarterly_due_dates:
@@ -67,3 +67,13 @@ extras:
       single: "15000"
       married_jointly: "30000"
       head_of_household: "15000"
+  # Employee FICA (employee share). Used by the Annual Tax Projection.
+  fica:
+    ss_rate: "0.062"
+    ss_wage_base: "184500"
+    medicare_rate: "0.0145"
+    additional_medicare_rate: "0.009"
+    additional_medicare_threshold:
+      single: "200000"
+      married_jointly: "250000"
+      head_of_household: "200000"
