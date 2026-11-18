@@ -3,6 +3,7 @@ Flask application for the Tax Withholding Calculator.
 """
 
 import os
+from dataclasses import fields
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -65,6 +66,7 @@ def _serialize_projection(result: ProjectionResult) -> dict:
         "gross_income": _money(result.gross_income),
         "wage_income": _money(result.wage_income),
         "liabilities": {name: _money(v) for name, v in result.liabilities.items()},
+        "fica": {f.name: _money(getattr(result.fica, f.name)) for f in fields(result.fica)},
         "total_liability": _money(result.total_liability),
         "effective_rate": _rate(result.effective_rate),
     }

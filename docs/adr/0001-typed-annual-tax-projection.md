@@ -42,3 +42,4 @@ The Additional Medicare Tax applies to combined household wages against the fili
 
 - Two code paths compute overlapping numbers, such as SDI, slightly differently. The projection is the more accurate of the two.
 - Self-employment tax is not coordinated with W-2 wages for the Social Security wage base, and Additional Medicare is not applied to SE income. Both are known gaps, inherited from `FederalEngine`.
+- Employee FICA rates, the Social Security wage base and Additional Medicare thresholds live in the federal tax tables under `extras.fica` (2025, 2026). `limits.se_tax_ss_wage_base` duplicates the wage base for `FederalEngine`; the 2026 value was corrected from an estimate (181,200) to SSA's final 184,500.

@@ -64,3 +64,18 @@ def test_projection_page_renders_form(client):
 def test_main_page_links_to_projection(client):
     html = client.get("/").get_data(as_text=True)
     assert 'href="/projection"' in html
+
+
+def test_project_response_includes_employee_fica_lines(client):
+    body = client.post("/project", json=_payload()).get_json()
+    # 78,000 × 6.2% = 4,836; 78,000 × 1.45% = 1,131
+    assert body["liabilities"]["social_security"] == "4836.00"
+    assert body["liabilities"]["medicare"] == "1131.00"
+    assert body["fica"]["additional_medicare"] == "0.00"
+    assert body["fica"]["salary1_social_security"] == "4836.00"
+
+
+def test_projection_page_explains_additional_medicare_withholding(client):
+    html = client.get("/projection").get_data(as_text=True)
+    assert "Additional Medicare" in html
+    assert "$200,000 per employer" in html
