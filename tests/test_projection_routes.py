@@ -61,6 +61,51 @@ def test_projection_page_renders_form(client):
         assert f'name="{name}"' in html
 
 
+def test_per_paycheck_pretax_without_frequency_returns_400(client):
+    resp = client.post("/project", json=_payload(pretax_deductions_1={"_401k": 500}))
+    assert resp.status_code == 400
+    errors = resp.get_json()["fields"]
+    assert any(
+        f["field"] == "pretax_deductions_1.input_type" and f["code"] == "frequency_required"
+        for f in errors
+    )
+
+
+def test_projection_page_has_collapsed_refinement_panels(client):
+    html = client.get("/projection").get_data(as_text=True)
+    for name in (
+        "salary1_frequency",
+        "salary2_frequency",
+        "pretax1_input_type",
+        "pretax1__401k",
+        "pretax1_ira",
+        "pretax1_hsa",
+        "pretax1_fsa",
+        "pretax1_health_insurance",
+        "pretax1_dental",
+        "pretax1_vision",
+        "pretax1_other",
+        "pretax2_input_type",
+        "pretax2__401k",
+        "income_1099g",
+        "income_1099nec",
+        "income_1099int_div",
+        "other_income",
+        "children_under_17",
+        "other_dependents",
+        "student_loan_interest",
+        "itemized_charitable",
+        "itemized_mortgage_interest",
+        "itemized_salt",
+        "itemized_medical",
+        "itemized_other",
+    ):
+        assert f'name="{name}"' in html, name
+    # Refinement panels are <details> elements, collapsed (no `open` attribute)
+    assert html.count('<details class="refine"') >= 5
+    assert '<details class="refine" open' not in html
+
+
 def test_main_page_links_to_projection(client):
     html = client.get("/").get_data(as_text=True)
     assert 'href="/projection"' in html
